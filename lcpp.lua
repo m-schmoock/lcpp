@@ -20,7 +20,7 @@
 --	local lcpp = require("lcpp")
 --
 --	-- use LuaJIT ffi and lcpp to parse cpp code
---	ffi.cdef("#include <your_header.h")
+--	ffi.cdef("#include <your_header.h>")
 --
 --	-- compile some input
 --	local out = lcpp.compile([[
@@ -75,7 +75,7 @@
 local lcpp = {}
 
 -- CONFIG
-lcpp.LCCP_LUA              = false   -- whether to use lccp to preprocess Lua code (load, loadfile, loadstring...)
+lcpp.LCCP_LUA              = false   -- whether to use lcpp to preprocess Lua code (load, loadfile, loadstring...)
 lcpp.LCCP_FFI              = true    -- whether to use lcpp as LuaJIT ffi PreProcessor (if used in luaJIT)
 lcpp.LCPP_TEST             = true    -- whether to run lcpp unit tests
 lcpp.ENV                   = {}      -- static predefines (env-like)
@@ -806,10 +806,11 @@ if lcpp.LCCP_LUA then
 end
 -- Use LCCP as LuaJIT PreProcessor if used inside LuaJIT. i.e. Hook ffi.cdef
 if lcpp.LCCP_FFI and pcall(require, "ffi") then
-	ffi = require("ffi");
+	ffi = require("ffi")
+	ffi.lcpp_defs = {} -- defs are stored and reused
 	ffi.lcpp = function(input) 
-		-- HINT: for ffi, we only want the output string not the lcpp state
-		local output = lcpp.compile(input)
+		local output, state = lcpp.compile(input, ffi.lcpp_defs)
+		ffi.lcpp_defs = state.defines
 		return output	
 	end
 	ffi.lcpp_cdef_backup = ffi.cdef
