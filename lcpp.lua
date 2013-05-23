@@ -3,12 +3,17 @@
 -- 
 -- Copyright (C) 2012-2013 Michael Schmoock <michael@willigens.de>
 --
---	Created as part of the mmBBQ project   http://mmbbq.org
---	Licensed under LuaJIT: MIT             http://luajit.org
---	GitHub page:                           https://github.com/willsteel/lcpp
---	Project page:                          http://lcpp.schmoock.net
+--### Links
+-- * GitHub page:   [http://github.com/willsteel/lcpp](http://github.com/willsteel/lcpp)
+-- * Project page:  [http://lcpp.schmoock.net](http://lcpp.schmoock.net)
+-- * Lua:           [http://www.lua.org](http://www.lua.org)
+-- * LuaJIT:        [http://luajit.org](http://luajit.org)
+-- * Sponsored by:  [http://mmbbq.org](http://mmbbq.org)
 -- 
--- It can be used to pre-process LuaJIT ffi C header file input:.
+-- It can be used to pre-process LuaJIT ffi C header file input. 
+-- It can also be used to preprocess any other code (i.e. Lua itself)
+--
+-- 	git clone https://github.com/willsteel/lcpp.git
 ----------------------------------------------------------------------------
 --## USAGE
 --	-- load lcpp
