@@ -660,8 +660,8 @@ function lcpp.init(input, predefines)
 	state:define(__LINE__, state.lineno, true)
 	state:define(__INDENT__, state.level, true)
 	predefines = predefines or {}
-	for k,v in pairs(lcpp.ENV) do	state:define(k,v, true) end	-- static ones
-	for k,v in pairs(predefines) do	state:define(k,v, true) end
+	for k,v in pairs(lcpp.ENV) do	state:define(k, v, true) end	-- static ones
+	for k,v in pairs(predefines) do	state:define(k, v, true) end
 	
 	if lcpp.LCPP_TEST then lcpp.STATE = state end -- activate static state debugging
 
