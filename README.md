@@ -9,7 +9,7 @@ But you can also preprocess any other stuff (even Lua code itself)
 
 
 ## Usage
-    -- load lccp (ffi and tests turned on per default)
+    -- load lcpp (ffi and tests turned on per default)
     local lcpp = require("lcpp")
         
     -- just use LuaJIT ffi and lcpp together
