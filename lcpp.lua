@@ -1,70 +1,72 @@
 ----------------------------------------------------------------------------
--- lcpp - a C-Preprocessor written in pur Lua 5.1 to be used for C and Lua
--- Copyright (C) 2013 - Michael Schmoock <michael@willigens.de>
---
--- Created as part of the mmBBQ project (http://mmbbq.org)
--- Licensed under LuaJIT: MIT           (http://luajit.org)
+--## lcpp - a C-PreProcessor in Lua 5.1 for LuaJIT ffi
 -- 
--- 1. Can be used to pre-process LuaJIT c-header input: 
---    ffi.cdef("#include ...")
--- 2. Can be used to pre-process Lua code.
---    for whatsoever reason: debug/nodebug, __LINE__, ...
+-- Copyright (C) 2012-2013 Michael Schmoock <michael@willigens.de>
+--
+--	Created as part of the mmBBQ project   http://mmbbq.org
+--	Licensed under LuaJIT: MIT             http://luajit.org
+--	GitHub page:                           https://github.com/willsteel/lcpp
+--	Project page:                          http://lcpp.schmoock.net
+-- 
+-- It can be used to pre-process LuaJIT ffi C header file input:.
 ----------------------------------------------------------------------------
---     -- USAGE
---     local lcpp = require("lcpp")
---     local out = lcpp.compile([[
---         #include "myheader.h"
---         #define MAXPATH 260
---         typedef struct somestruct_t {
---             void*          base;
---             size_t         size;
---             wchar_t        path[MAXPATH];
---         } t_exe;
---     ]]);
+--## USAGE
+--	-- load lcpp
+--	local lcpp = require("lcpp")
 --
+--	-- use LuaJIT ffi and lcpp to parse cpp code
+--	ffi.cdef("#include <your_header.h")
 --
---     -- RESULT
---     out = [[
---         // <preprocessed content of file "myheader.h">
---         typedef struct somestruct_t {
---             void*          base;
---             size_t         size;
---             wchar_t        path[260];
---         } t_exe;
---     ]]
+--	-- compile some input
+--	local out = lcpp.compile([[
+--		#include "myheader.h"
+--		#define MAXPATH 260
+--		typedef struct somestruct_t {
+--			void*          base;
+--			size_t         size;
+--			wchar_t        path[MAXPATH];
+--		} t_exe;
+--	]])
 --
-------------------------------------------------------------------------------
--- -- This CPPs BNF:
+--	-- the result should be
+--	out = [[
+--		// <preprocessed content of file "myheader.h">
+--		typedef struct somestruct_t {
+--			void*          base;
+--			size_t         size;
+--			wchar_t        path[260];
+--		} t_exe;
+--	]]
 --
--- -- RULES
--- CODE              := {LINE}
--- LINE              := {STUFF NEWML} STUFF  NEWL
--- STUFF             := DIRECTIVE | IGNORED_CONTENT
--- DIRECTIVE         := OPTSPACES CMD OPTSPACES DIRECTIVE_NAME WHITESPACES DIRECTIVE_CONTENT WHITESPACES NEWL
+--## This CPPs BNF:
+--	RULES:
+--	CODE              := {LINE}
+--	LINE              := {STUFF NEWML} STUFF  NEWL
+--	STUFF             := DIRECTIVE | IGNORED_CONTENT
+--	DIRECTIVE         := OPTSPACES CMD OPTSPACES DIRECTIVE_NAME WHITESPACES DIRECTIVE_CONTENT WHITESPACES NEWL
 --
--- -- LEAVES
--- NEWL              := "\n"
--- NEWL_ESC          := "\\n"
--- WHITESPACES       := "[ \t]+"
--- OPTSPACES         := "[ \t]*"
--- COMMENT           := "//(.-)$"
--- MLCOMMENT         := "/[*](.-)[*]/"
--- IGNORED_CONTENT   := "[^#].*"
--- CMD               := "#"
--- DIRECTIVE_NAME    := "include"|"define"|"undef"|"if"|"else"|"elif"|"endif"|"ifdef"|"ifndef"|"pragma"
--- DIRECTIVE_CONTENT := ".*?"
+--	LEAVES:
+--	NEWL              := "\n"
+--	NEWL_ESC          := "\\n"
+--	WHITESPACES       := "[ \t]+"
+--	OPTSPACES         := "[ \t]*"
+--	COMMENT           := "//(.-)$"
+--	MLCOMMENT         := "/[*](.-)[*]/"
+--	IGNORED_CONTENT   := "[^#].*"
+--	CMD               := "#"
+--	DIRECTIVE_NAME    := "include"|"define"|"undef"|"if"|"else"|"elif"|"endif"|"ifdef"|"ifndef"|"pragma"
+--	DIRECTIVE_CONTENT := ".*?"
 --
-------------------------------------------------------------------------------
--- TODOs:
---  - "#" and "##" cpp string operators:
---     i.e.: #define DECLARE_HANDLE(name) struct name##__ { int unused; }; typedef struct name##__ *name
---     Should expand to:  struct HINSTANCE__ { int unused; }; typedef struct HINSTANCE__ *HINSTANCE;
---     - The ## is the pre-processor token pasting operator. The left token is appended with the right token.
---  - "#else if defined(...)" not working but "#elif defined(...)" works
---  - lcpp.LCCP_LUA for: load, loadfile
+--## TODOs:
+--	- "#" and "##" cpp string operators:
+--	  i.e.: #define DECLARE_HANDLE(name) struct name##__ { int unused; }; typedef struct name##__ *name
+--	  Should expand to:  struct HINSTANCE__ { int unused; }; typedef struct HINSTANCE__ *HINSTANCE;
+--	- The ## is the pre-processor token pasting operator.The left token is appended with the right token.
+--	- "#else if defined(...)" not working but "#elif defined(...)" works
+--	- lcpp.LCCP_LUA for: load, loadfile
 --
 ----------------------------------------------------------------------------
--- @module utils.lcpp
+-- @module lcpp
 local lcpp = {}
 
 -- CONFIG
