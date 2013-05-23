@@ -1,14 +1,19 @@
 lcpp
 ====
 
-# A Lua C PreProcessor
+## a C PreProcessor in Lua 5.1 for LuaJIT ffi
 
 This module offers a standard preprocessor for C code in pure Lua. 
 The primary usecase is to enable LuaJIT ffi preprocessing.
 But you can also preprocess any other stuff (even Lua code itself)
 
+### Links
+ * Project page   http://lcpp.schmoock.net
+ * GitHub Page    https://github.com/willsteel/lcpp
+ * LuaJIT         http://luajit.org
+ * Sponsored by   http://mmbbq.org
 
-## Usage
+### Usage
     -- load lcpp (ffi and tests turned on per default)
     local lcpp = require("lcpp")
         
@@ -26,5 +31,6 @@ But you can also preprocess any other stuff (even Lua code itself)
         } t_exe;
     ]])
 
-## Make targets
+### Make targets
     make test      # run the included test cases
+    make doc       # ldoc must be installed
