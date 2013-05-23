@@ -1,7 +1,7 @@
-lcpp
-====
+<p align="center"><a href="http://lua.org"><img src="http://lcpp.schmoock.net/lua-logo-lcpp.png"></a></p>
+===
 
-## a C PreProcessor in Lua 5.1 for LuaJIT ffi
+## lcpp - a C PreProcessor in Lua 5.1 for LuaJIT ffi
 
 This module offers a standard preprocessor for C code in pure Lua. 
 The primary usecase is to enable LuaJIT ffi preprocessing.
