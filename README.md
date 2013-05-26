@@ -35,3 +35,4 @@ But you can also preprocess any other stuff (even Lua code itself)
 ### Make targets
     make test      # run the included test cases
     make doc       # ldoc must be installed
+

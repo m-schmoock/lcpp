@@ -23,8 +23,6 @@ description = [[
 
 readme = {
 	"README.md",
-	"CHANGELOG",
-	"LICENSE",
 }
 
 file = {
