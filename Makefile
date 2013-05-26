@@ -7,7 +7,7 @@ prepare:
 clean:
 	rm -rf luadoc
 test:
-	lua -e 'local lcpp = require("lcpp"); lcpp.test("Test sucessful");'
+	lua -e 'local lcpp = require("lcpp"); lcpp.test();'
 
 
 # DOC

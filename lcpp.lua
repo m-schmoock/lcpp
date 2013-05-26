@@ -723,7 +723,7 @@ end
 -- ------------
 -- SATIC UNIT TESTS
 -- ------------
-function lcpp.test(msg)
+function lcpp.test(suppressMsg)
 	local testLabelCount = 0
 	local function getTestLabel()
 		testLabelCount = testLabelCount + 1
@@ -808,9 +808,9 @@ function lcpp.test(msg)
 	local testlua = lcpp.compile(testlcpp)
 	--error(testlua)
 	assert(loadstring(testlua, "testlua"))()
-	if msg then print(msg) end
+	if not suppressMsg then print("Test run suscessully") end
 end
-if lcpp.LCPP_TEST then lcpp.test() end
+if lcpp.LCPP_TEST then lcpp.test(true) end
 
 
 -- ------------
