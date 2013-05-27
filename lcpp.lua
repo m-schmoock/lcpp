@@ -68,7 +68,7 @@
 --	  Should expand to:  struct HINSTANCE__ { int unused; }; typedef struct HINSTANCE__ *HINSTANCE;
 --	- The ## is the pre-processor token pasting operator.The left token is appended with the right token.
 --	- "#else if defined(...)" not working but "#elif defined(...)" works
---	- lcpp.LCCP_LUA for: load, loadfile
+--	- lcpp.LCPP_LUA for: load, loadfile
 --
 --## License (MIT)
 -- -----------------------------------------------------------------------------
@@ -97,9 +97,9 @@
 local lcpp = {}
 
 -- CONFIG
-lcpp.LCCP_LUA              = false   -- whether to use lcpp to preprocess Lua code (load, loadfile, loadstring...)
-lcpp.LCCP_FFI              = true    -- whether to use lcpp as LuaJIT ffi PreProcessor (if used in luaJIT)
-lcpp.LCPP_TEST             = true    -- whether to run lcpp unit tests
+lcpp.LCPP_LUA              = false   -- whether to use lcpp to preprocess Lua code (load, loadfile, loadstring...)
+lcpp.LCPP_FFI              = true    -- whether to use lcpp as LuaJIT ffi PreProcessor (if used in luaJIT)
+lcpp.LCPP_TEST             = false   -- whether to run lcpp unit tests when loading lcpp module
 lcpp.ENV                   = {}      -- static predefines (env-like)
 
 -- PREDEFINES
@@ -731,7 +731,7 @@ function lcpp.test(suppressMsg)
 	end
 	
 	local testlcpp = [[
-		// This test uses LCCP with lua code (uncommon but possible)
+		// This test uses LCPP with lua code (uncommon but possible)
 		/* 
 		 * It therefore asserts any if/else/macro functions and various syntaxes
 		 * (including this comment, that would cause errors if not filtered)
@@ -817,26 +817,49 @@ if lcpp.LCPP_TEST then lcpp.test(true) end
 -- REGISTER LCPP
 -- ------------
 
--- USE LCPP to process Lua code (load, loadfile, loadstring...)
-if lcpp.LCCP_LUA then
-	-- TODO: make it properly work on all functions
-	error("lcpp.LCCP_LUA = true -- not properly implemented yet");
-	_G.loadstring_lcpp_backup = _G.loadstring
-	_G.loadstring = function(str, chunk) 
-		return loadstring_lcpp_backup(lcpp.compile(str), chunk) 
+--- disable lcpp processing for ffi, loadstring and such
+lcpp.disable = function()
+	if lcpp.LCPP_LUA then
+		-- activate LCPP_LUA actually does anything useful
+		-- _G.loadstring = _G.loadstring_lcpp_backup
+	end	
+	
+	if lcpp.LCPP_FFI and pcall(require, "ffi") then
+		ffi = require("ffi")
+		if ffi.lcpp_cdef_backup then
+			ffi.cdef = ffi.lcpp_cdef_backup
+			ffi.lcpp_cdef_backup = nil
+		end
 	end
-end
--- Use LCCP as LuaJIT PreProcessor if used inside LuaJIT. i.e. Hook ffi.cdef
-if lcpp.LCCP_FFI and pcall(require, "ffi") then
-	ffi = require("ffi")
-	ffi.lcpp_defs = {} -- defs are stored and reused
-	ffi.lcpp = function(input) 
-		local output, state = lcpp.compile(input, ffi.lcpp_defs)
-		ffi.lcpp_defs = state.defines
-		return output	
-	end
-	ffi.lcpp_cdef_backup = ffi.cdef
-	ffi.cdef = function(input) return ffi.lcpp_cdef_backup(ffi.lcpp(input)) end
 end
 
-return lcpp;
+--- (re)enable lcpp processing for ffi, loadstring and such
+lcpp.enable = function()
+	-- Use LCPP to process Lua code (load, loadfile, loadstring...)
+	if lcpp.LCPP_LUA then
+		-- TODO: make it properly work on all functions
+		error("lcpp.LCPP_LUA = true -- not properly implemented yet");
+		_G.loadstring_lcpp_backup = _G.loadstring
+		_G.loadstring = function(str, chunk) 
+			return loadstring_lcpp_backup(lcpp.compile(str), chunk) 
+		end
+	end
+	-- Use LCPP as LuaJIT PreProcessor if used inside LuaJIT. i.e. Hook ffi.cdef
+	if lcpp.LCPP_FFI and pcall(require, "ffi") then
+		ffi = require("ffi")
+		if not ffi.lcpp_cdef_backup then
+			if not ffi.lcpp_defs then ffi.lcpp_defs = {} end -- defs are stored and reused
+			ffi.lcpp = function(input) 
+				local output, state = lcpp.compile(input, ffi.lcpp_defs)
+				ffi.lcpp_defs = state.defines
+				return output	
+			end
+			ffi.lcpp_cdef_backup = ffi.cdef
+			ffi.cdef = function(input) return ffi.lcpp_cdef_backup(ffi.lcpp(input)) end
+		end
+	end
+end
+
+lcpp.enable()
+return lcpp
+
