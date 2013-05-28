@@ -1,5 +1,5 @@
-package = "lcpp.git"
-version = "git HEAD"
+package = "lcpp"
+version = "scm-1"
 rockspec_format = "1.0"
 
 source = {
@@ -11,15 +11,15 @@ description = {
    detailed = [[
       This module offers a standard preprocessor for C code in pure Lua. 
       The primary usecase is to enable LuaJIT ffi preprocessing. 
-      But you can also preprocess any other stuff (even Lua code itself).
+      But you can also preprocess any other data (even Lua code itself).
       github site: (https://github.com/willsteel/lcpp)
    ]],
    homepage = "http://lcpp.schmoock.net/",
-   license = "MIT",
+   license = "MIT/X11",
 }
 
 dependencies = {
-   "lua >= 5.1",
+   "lua >= 5.1",  -- luajit >= 2.0.0 is recommended but not required
 }
 
 build = {
