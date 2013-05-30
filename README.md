@@ -36,3 +36,7 @@ But you can also preprocess any other stuff (even Lua code itself)
     make test      # run the included test cases
     make doc       # ldoc must be installed
 
+### License
+MIT licencse included in lua modue.
+
+2012-2013 Michael Schmoock <michael@willigens.de>
