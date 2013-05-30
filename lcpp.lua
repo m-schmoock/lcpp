@@ -59,7 +59,7 @@
 --	MLCOMMENT         := "/[*](.-)[*]/"
 --	IGNORED_CONTENT   := "[^#].*"
 --	CMD               := "#"
---	DIRECTIVE_NAME    := "include"|"define"|"undef"|"if"|"else"|"elif"|"endif"|"ifdef"|"ifndef"|"pragma"
+--	DIRECTIVE_NAME    := "include"|"define"|"undef"|"if"|"else"|"elif"|"else if"|"endif"|"ifdef"|"ifndef"|"pragma"
 --	DIRECTIVE_CONTENT := ".*?"
 --
 --## TODOs:
@@ -151,6 +151,7 @@ local UNDEF           = STARTL.._UNDEF..WHITESPACES.."("..IDENTIFIER..")"..OPTSP
 local IF              = STARTL.._IF..WHITESPACES.."(.*)"..ENDL
 local ELSE            = STARTL.._ELSE..OPTSPACES..ENDL
 local ELIF            = STARTL.._ELIF..WHITESPACES.."(.*)"..ENDL
+local ELSEIF          = STARTL.._ELSE..WHITESPACES.._IF..WHITESPACES.."(.*)"..ENDL
 local ERROR           = STARTL.._ERROR..WHITESPACES.."("..TEXT..")"..OPTSPACES..ENDL
 local ERROR_NOTEXT    = STARTL.._ERROR..OPTSPACES..ENDL	--> not required when we have POSIX regex
 local PRAGMA          = STARTL.._PRAGMA
@@ -332,48 +333,74 @@ local function processLine(state, line)
 	
 	if cmd then
 		--[[ IF/THEN/ELSE STRUCTURAL BLOCKS ]]--
-		local ifdef  = cmd:match(IFDEF)
-		local ifndef = cmd:match(IFNDEF)
-		local endif  = cmd:match(ENDIF)
-		local ifexp  = cmd:match(IF)
-		local else_  = cmd:match(ELSE)
-		local elif   = cmd:match(ELIF)
-		
+		local ifdef   = cmd:match(IFDEF)
+		local ifexp   = cmd:match(IF)
+		local ifndef  = cmd:match(IFNDEF)
+		local elif    = cmd:match(ELIF)
+		local elseif_ = cmd:match(ELSEIF)
+		local else_   = cmd:match(ELSE)
+		local endif   = cmd:match(ENDIF)
+
+		local struct        = ifdef or ifexp or ifndef or elif or elseif_ or else_ or endif
+		local struct_open   = ifdef or ifexp or ifndef
+		local struct_reopen = elif or elseif_ or else_
+		local struct_close  = true and endif
+
+		--[[
+		-- set block depth
+		if struct_open  then state:incLvl() end
+		if struct_close then state:decLvl() end
+		if state.skip >= state.level then return end
+
+		-- set skipping
+		if struct then 
+			state.skip = state.level
+			if state.elseSkip == -1 then
+				if ifdef   and state:defined(ifdef)      then state.skip = -1; state.elseSkip = state.level end
+				if ifndef  and not state:defined(ifndef) then state.skip = -1; state.elseSkip = state.level end
+				if ifexp   and state:parseExpr(ifexp)    then state.skip = -1; state.elseSkip = state.level end
+				if elif    and state:parseExpr(elif)     then state.skip = -1; state.elseSkip = state.level end
+				if elseif_ and state:parseExpr(elseif_)  then state.skip = -1; state.elseSkip = state.level end
+				if else_   then state.skip = state.elseSkip end
+			end
+		end
+		]]--
+
 		-- inc block depth
-		if ifdef or ifndef or ifexp or elif then state:incLvl() end
+		if struct_open or struct_reopen then state:incLvl() end
 		-- clear else skipping
-		if endif then if state.level == state.elseSkipLevel then state.elseSkipLevel = -1 end end
-		if endif or else_ or elif then
-			if state.level < 0 then error("Unopened #endif or #else detected. Indentaion problem.") end
-			-- clear skipLevel if end of block reached
-			if state.level == state.skipLevel then state.skipLevel = -1 end
+		if endif then if state.level == state.elseSkip then state.elseSkip = -1 end end
+		if endif or else_ or elif or elseif_ then
+			-- clear skip if end of block reached
+			if state.level == state.skip then state.skip = -1 end
 			state:decLvl()
 		end
 		-- set skipping mode if directive evaluates to false and not already skipping
-		if state.skipLevel == -1 then
-			if ifdef  and not state:defined(ifdef)   then state.skipLevel = state.level end
-			if ifndef and     state:defined(ifndef)  then state.skipLevel = state.level end
-			if ifexp  and not state:parseExpr(ifexp) then state.skipLevel = state.level end
-			if elif   and not state:parseExpr(elif)  then state.skipLevel = state.level end
+		if state.skip == -1 then
+			if ifdef   and not state:defined(ifdef)     then state.skip = state.level end
+			if ifndef  and     state:defined(ifndef)    then state.skip = state.level end
+			if ifexp   and not state:parseExpr(ifexp)   then state.skip = state.level end
+			if elif    and not state:parseExpr(elif)    then state.skip = state.level end
+			if elseif_ and not state:parseExpr(elseif_) then state.skip = state.level end
 		end
 		-- same with else blocks
-		if state.elseSkipLevel == -1 then
-			if ifdef  and     state:defined(ifdef)   then state.elseSkipLevel = state.level end 
-			if ifndef and not state:defined(ifndef)  then state.elseSkipLevel = state.level end
-			if ifexp  and     state:parseExpr(ifexp) then state.elseSkipLevel = state.level end
-			if elif   and     state:parseExpr(elif)  then state.elseSkipLevel = state.level end
+		if state.elseSkip == -1 then
+			if ifdef   and     state:defined(ifdef)     then state.elseSkip = state.level end 
+			if ifndef  and not state:defined(ifndef)    then state.elseSkip = state.level end
+			if ifexp   and     state:parseExpr(ifexp)   then state.elseSkip = state.level end
+			if elif    and     state:parseExpr(elif)    then state.elseSkip = state.level end
+			if elseif_ and     state:parseExpr(elseif_) then state.elseSkip = state.level end
 		end
 		if else_ then
-			state:incLvl()
 			-- activate else skipping if activated from prior directive
-			if state.elseSkipLevel == state.level then state.skipLevel = state.level end
+			if state.elseSkip == state.level then state.skip = state.level end
 		end
-		
-		if ifdef or ifndef or ifexp or endif or else_ then return end
+		-- remove structural directives
+		if struct then return end
 	end
 	
-	-- remove skipped and structural directives stuff
-	if state.skipLevel >= 0 and state.level >= state.skipLevel then return end
+	-- remove skipped stuff
+	if state.skip >= 0 and state.level >= state.skip then return end
 	
 	
 	--[[ APPLY MACROS ]]--
@@ -642,13 +669,13 @@ end
 --- initialies a lcpp state. not needed manually. handy for testing
 function lcpp.init(input, predefines)
 	-- create sate var
-	local state          = {}
-	state.defines        = {}     				-- the table of known defines and replacements
-	state.screener       = screener(input)
-	state.lineno         = 0                    -- the current line number
-	state.level          = 0                    -- indentation level for ifdefs and such
-	state.skipLevel      = -1
-	state.elseSkipLevel  = -1
+	local state     = {}
+	state.defines   = {}     				-- the table of known defines and replacements
+	state.screener  = screener(input)
+	state.lineno    = 0                    -- the current line number
+	state.level     = 0                    -- indentation level for ifdefs and such
+	state.skip      = -1
+	state.elseSkip  = -1
 	
 	-- funcs
 	state.define = define
@@ -667,6 +694,7 @@ function lcpp.init(input, predefines)
 	state.decLvl = function(state)
 		state.level = state.level - 1
 		state:define(__INDENT__, state.level, true)
+		if state.level < 0 then error("Unopened block detected. Indentaion problem.") end
 	end
 	state.getLine = function(state)
 		state.lineno = state.lineno + 1
@@ -741,50 +769,40 @@ function lcpp.test(suppressMsg)
 		#define LEET 0x1337
 		#pragma ignored
 		
-		local lcpp_assert_replace_1 = LEET;
-		assert(lcpp_assert_replace_1 == 0x1337, "simple #define replacement")
+		local replaced = LEET
+		assert(replaced == 0x1337, "simple #define replacement")
 		
 		#ifdef TRUE
 		#else
-			assert(false, "simple #define if/else test 1")
+			assert(false, "#define if/else test 1")
 		#endif
 		#	ifdef NOTDEFINED
-			assert(false, "simple #define if/else test 2")
+			assert(false, "#define if/else test 2")
 		#endif
 		#ifndef NOTDEFINED
 		#else
-			assert(false, "simple #define if/else test 3")
+			assert(false, "#define if/else test 3")
 		#endif
 		
 		#if defined TRUE	// < skipped brackets also valid
 		#else
-			assert(false, "if defined statement test 1")
+			assert(false, "#if defined statement test 1")
 		#endif
 		#if !defined(LEET) && !defined(TRUE)
-			assert(false, "if defined statement test 2")
+			assert(false, "#if defined statement test 2")
 		#endif
 		#if !defined(NOTLEET) && !defined(NOTDEFINED)
 		#else
-			assert(false, "if defined statement test 3")
+			assert(false, "#if defined statement test 3")
 		#endif
 		#if !(defined(LEET) && defined(TRUE))
 		#else
-			assert(false, "if defined statement test 4")
+			assert(false, "#if defined statement test 4")
 		#endif
 		
 		assert(__INDENT__ == 0, "indentation test 1")
 		#if defined(TRUE)
 			assert(__INDENT__ == 1, "indentation test 2")
-			#if !defined LEET
-				assert(false, "indentation test 3")
-			#endif
-		#else
-			assert(false, "indentation test 4")
-			#if defined(LEET)
-				assert(false, "indentation test 5")
-			#else
-				assert(false, "indentation test 6")
-			#endif
 		#endif
 		assert(__INDENT__ == 0, "indentation test 7")
 		
@@ -794,15 +812,24 @@ function lcpp.test(suppressMsg)
 			(not x and y)
 		assert(LCPP_FUNCTION_2(false, true), "multiline function macro")
 		
-		#ifdef TRUE
-		#elif !defined(TRUE)
-			assert(false, "elif test 1")
+		#if defined(NOTDEFINED)
+			assert(false, "#elif test 1")
 		#elif defined(NOTDEFINED)
-			assert(false, "elif test 2")
+			assert(false, "#elif test 2")
+		#elif defined(TRUE)
+			assert(false, "#elif test 4 - MUST BE CALLED")
+		#else
+			assert(false, "#elif test 6")
+		#endif
+
+		#if defined(NOTDEFINED)
+			assert(false, "#else if test 1")
 		#else if defined(NOTDEFINED)
-			assert(false, "elif test 3")
+			assert(false, "#else if test 2")
 		#else if defined(TRUE)
-			-- TODO: not working!
+			assert(false, "#else if test 4 - MUST BE CALLED")
+		#else
+			assert(false, "#else if test 6")
 		#endif
 	]]
 	local testlua = lcpp.compile(testlcpp)
