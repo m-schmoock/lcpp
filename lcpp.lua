@@ -324,6 +324,38 @@ local function screener(input)
 	return coroutine.wrap(function() _screener(input) end)
 end
 
+-- apply currently known macros to input (and returns it)
+local function apply(state, input)
+	local out = {}
+	local functions = {}
+	for k, v, start, end_ in tokenizer(input) do
+		if k == "identifier" then 
+			local repl = v
+			local macro = state:defined(v) 
+			if macro then
+				if type(macro) == "boolean" then
+					repl = ""
+				elseif type(macro) == "string" then
+					repl = macro
+				elseif type(macro) == "number" then
+					repl = tostring(macro)
+				elseif type(macro) == "function" then
+					table.insert(functions, macro)	-- we apply functions in a later step
+				end
+			end
+			table.insert(out, repl)
+		else
+			table.insert(out, input:sub(start, end_))
+		end
+	end
+	input = table.concat(out)
+	for _, func in pairs(functions) do	-- TODO: looks sucky (but works quite nice)
+		input = func(input)
+	end
+
+	return input
+end
+
 -- processes an input line. called from lcpp doWork loop
 local function processLine(state, line)
 	if not line or #line == 0 then return line end
@@ -402,37 +434,6 @@ local function processLine(state, line)
 	-- remove skipped stuff
 	if state.skip >= 0 and state.level >= state.skip then return end
 	
-	
-	--[[ APPLY MACROS ]]--
-	local out = {}
-	local functions = {}
-	for k, v, start, end_ in tokenizer(line) do
-		if k == "identifier" then 
-			local repl = v
-			local macro = state:defined(v) 
-			if macro then
-				if type(macro) == "boolean" then
-					repl = ""
-				elseif type(macro) == "string" then
-					repl = macro
-				elseif type(macro) == "number" then
-					repl = tostring(macro)
-				elseif type(macro) == "function" then
-					table.insert(functions, macro)	-- we apply functions in a later step
-				end
-			end
-			table.insert(out, repl)
-		else
-			table.insert(out, line:sub(start, end_))
-		end
-	end
-	line = table.concat(out)
-	for _, func in pairs(functions) do	-- TODO: looks sucky (but works quite nice)
-		line = func(line)
-	end
-	-- cmd may have changed due to macros
-	if line:byte(1) == CMD_BYTE then cmd = line:sub(2) end
-
 
 	--[[ READ NEW DIRECTIVES ]]--
 	if cmd then
@@ -490,6 +491,12 @@ local function processLine(state, line)
 		error("unknown directive: "..line)
 	end
 
+	
+	--[[ APPLY MACROS ]]--
+	line = state:apply(line);
+	-- cmd may have changed due to macros (TODO: really?)
+	--if line:byte(1) == CMD_BYTE then cmd = line:sub(2) end
+	
 	return line
 end
 
@@ -520,6 +527,10 @@ end
 local function define(state, key, value, override)
 	--print("define:"..key.." type:"..type(value))
 	if not override and state:defined(key) then error("already defined: "..key) end
+
+	-- apply macros to replacement, so macro chaining works
+	if type(value) == "string" then value = state:apply(value) end
+
 	state.defines[key] = value
 end
 
@@ -625,7 +636,10 @@ end
 local function parseFunction(state, inputStr)
 	local name, argsstr, repl = inputStr:match(FUNCMACRO)
 	if not name or not argsstr or not repl then return end
-	
+
+	-- apply macros to replacement first
+	repl = state:apply(repl);
+
 	-- rename args to "%1" "%2" .. for later gsub
 	local noargs = 0
 	for argname in argsstr:gmatch(IDENTIFIER) do
@@ -685,6 +699,7 @@ function lcpp.init(input, predefines)
 	state.defined = function(state, key)
 		return state.defines[key]
 	end
+	state.apply = apply
 	state.includeFile = includeFile
 	state.doWork = doWork
 	state.incLvl = function(state)
@@ -769,8 +784,7 @@ function lcpp.test(suppressMsg)
 		#define LEET 0x1337
 		#pragma ignored
 		
-		local replaced = LEET
-		assert(replaced == 0x1337, "simple #define replacement")
+		assert(LEET == 0x1337, "simple #define replacement")
 		
 		#ifdef TRUE
 		#else
@@ -799,7 +813,11 @@ function lcpp.test(suppressMsg)
 		#else
 			assert(false, "#if defined statement test 4")
 		#endif
-		
+
+		#define FOO 123
+		#define BAR FOO+123
+		assert(BAR == 123*2, "macro chaining")
+
 		assert(__INDENT__ == 0, "indentation test 1")
 		#if defined(TRUE)
 			assert(__INDENT__ == 1, "indentation test 2")
@@ -817,7 +835,7 @@ function lcpp.test(suppressMsg)
 		#elif defined(NOTDEFINED)
 			assert(false, "#elif test 2")
 		#elif defined(TRUE)
-			assert(false, "#elif test 4 - MUST BE CALLED")
+			assert(false, "#elif test 4 - MUST BE CALLED (fixed)")
 		#else
 			assert(false, "#elif test 6")
 		#endif
@@ -827,7 +845,7 @@ function lcpp.test(suppressMsg)
 		#else if defined(NOTDEFINED)
 			assert(false, "#else if test 2")
 		#else if defined(TRUE)
-			assert(false, "#else if test 4 - MUST BE CALLED")
+			assert(false, "#else if test 4 - MUST BE CALLED (fixed)")
 		#else
 			assert(false, "#else if test 6")
 		#endif
