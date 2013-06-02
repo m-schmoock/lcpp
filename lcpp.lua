@@ -218,6 +218,17 @@ local function trim(str)
 	return from > #str and "" or str:match(".*%S", from)
 end
 
+-- returns the number of string occurrences
+local function findn(input, what)
+	local count = 0
+	local offset = 1
+	while true do 
+			_, offset = string.find(input, what, offset, true)
+			if not offset then return count end
+			count = count + 1
+	end
+end
+
 -- a lightweight and flexible tokenizer
 local function _tokenizer(str, setup)
 	if not setup then
@@ -362,9 +373,10 @@ local function processLine(state, line)
 	local cmd = nil 
 	if line:byte(1) == CMD_BYTE then cmd = line:sub(2) end
 	--print("processLine(): "..line)
-	
+
+
+	--[[ IF/THEN/ELSE STRUCTURAL BLOCKS ]]--
 	if cmd then
-		--[[ IF/THEN/ELSE STRUCTURAL BLOCKS ]]--
 		local ifdef   = cmd:match(IFDEF)
 		local ifexp   = cmd:match(IF)
 		local ifndef  = cmd:match(IFNDEF)
@@ -431,7 +443,7 @@ local function processLine(state, line)
 		if struct then return end
 	end
 	
-	-- remove skipped stuff
+	--[[ SKIPPING ]]-- 
 	if state.skip >= 0 and state.level >= state.skip then return end
 	
 
@@ -772,33 +784,46 @@ function lcpp.test(suppressMsg)
 		testLabelCount = testLabelCount + 1
 		return " lcpp_assert_"..testLabelCount
 	end
-	
+
+	-- this ugly global is required so our testcode can find it
+	_G.lcpp_test = {
+		assertTrueCalls = 0;
+		assertTrueCount = 0;
+		assertTrue = function()
+			lcpp_test.assertTrueCount = lcpp_test.assertTrueCount + 1;
+		end
+	}
+
 	local testlcpp = [[
 		// This test uses LCPP with lua code (uncommon but possible)
 		/* 
 		 * It therefore asserts any if/else/macro functions and various syntaxes
 		 * (including this comment, that would cause errors if not filtered)
 		 */
-		
+	
 		#define TRUE
 		#define LEET 0x1337
 		#pragma ignored
-		
+	
+		lcpp_test.assertTrue()
 		assert(LEET == 0x1337, "simple #define replacement")
 		
 		#ifdef TRUE
+			lcpp_test.assertTrue()
 		#else
 			assert(false, "#define if/else test 1")
 		#endif
-		#	ifdef NOTDEFINED
+		#ifdef NOTDEFINED
 			assert(false, "#define if/else test 2")
 		#endif
 		#ifndef NOTDEFINED
+			lcpp_test.assertTrue()
 		#else
 			assert(false, "#define if/else test 3")
 		#endif
-		
-		#if defined TRUE	// < skipped brackets also valid
+	
+		#if defined(TRUE)
+			lcpp_test.assertTrue()
 		#else
 			assert(false, "#if defined statement test 1")
 		#endif
@@ -806,13 +831,19 @@ function lcpp.test(suppressMsg)
 			assert(false, "#if defined statement test 2")
 		#endif
 		#if !defined(NOTLEET) && !defined(NOTDEFINED)
+			lcpp_test.assertTrue()
 		#else
 			assert(false, "#if defined statement test 3")
 		#endif
 		#if !(defined(LEET) && defined(TRUE))
+			lcpp_test.assertTrue()
 		#else
 			assert(false, "#if defined statement test 4")
 		#endif
+
+		# if defined TRUE 
+			lcpp_test.assertTrue() -- valid strange syntax test (spaces and missing brackets)
+		# endif
 
 		#define FOO 123
 		#define BAR FOO+123
@@ -835,9 +866,9 @@ function lcpp.test(suppressMsg)
 		#elif defined(NOTDEFINED)
 			assert(false, "#elif test 2")
 		#elif defined(TRUE)
-			assert(false, "#elif test 4 - MUST BE CALLED (fixed)")
+			--l-cpp_test.assertTrue()
 		#else
-			assert(false, "#elif test 6")
+			assert(false, "#elif test 3")
 		#endif
 
 		#if defined(NOTDEFINED)
@@ -845,14 +876,17 @@ function lcpp.test(suppressMsg)
 		#else if defined(NOTDEFINED)
 			assert(false, "#else if test 2")
 		#else if defined(TRUE)
-			assert(false, "#else if test 4 - MUST BE CALLED (fixed)")
+			--l-cpp_test.assertTrue()
 		#else
-			assert(false, "#else if test 6")
+			assert(false, "#else if test 3")
 		#endif
 	]]
-	local testlua = lcpp.compile(testlcpp)
 	--error(testlua)
+	local testlua = lcpp.compile(testlcpp)
 	assert(loadstring(testlua, "testlua"))()
+	lcpp_test.assertTrueCalls = findn(testlcpp, "lcpp_test.assertTrue()")
+	assert(lcpp_test.assertTrueCount == lcpp_test.assertTrueCalls, "assertTrueCalls: "..lcpp_test.assertTrueCount)
+	_G.lcpp_test = nil	-- delete ugly global hack
 	if not suppressMsg then print("Test run suscessully") end
 end
 if lcpp.LCPP_TEST then lcpp.test(true) end
