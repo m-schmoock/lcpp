@@ -318,7 +318,7 @@ local function removeComments(input)
 				offset = endi
 			else
 				offset = nil
-				table.insert(output, input:sub(lastendi+1 or 1))
+				table.insert(output, input:sub((lastendi or 0) + 1))
 			end
 		end
 		input = table.concat(output, "")
