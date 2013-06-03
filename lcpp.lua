@@ -163,8 +163,7 @@ local REPLMACRO = STARTL.."("..IDENTIFIER..")"..WHITESPACES.."(.+)$"
 local FUNCMACRO = STARTL.."("..IDENTIFIER..")%s*%(([%s%w,]*)%)%s*(.*)"
 
 -- current state for debugging the last operation
-lcpp.STATE = {}
-lcpp.STATE.lineno = 0
+lcpp.STATE = {lineno = 0}
 
 -- ------------
 -- LOCAL UTILS
@@ -302,29 +301,31 @@ end
 
 -- hint: LuaJIT ffi does not rely on us to remove the comments, but maybe other usecases
 local function removeComments(input)
-		-- remove multiline comments in a way that it does not break __LINE__ macro
-		--input = string.gsub(input, "/%*.-%*/", "") -- remove ml comments (stupid method)
-		local offset = 0
-		local output = {}
-		local starti, endi, match, lastendi
-		while offset do
-			starti, endi, match = input:find("/%*(.-)%*/", offset, false)
-			if starti then
-				lastendi = endi
-				local newlineCount = findn(match, "\n")
-				local newlines = string.rep("\n", newlineCount)
-				table.insert(output, input:sub(offset+1, starti-1))
-				table.insert(output, newlines)
-				offset = endi
-			else
-				offset = nil
-				table.insert(output, input:sub(lastendi+1 or 1))
-			end
-		end
-		input = table.concat(output, "")
-		--error(input)
-
 		input = string.gsub(input, "//.-\n", "\n") -- remove sl comments
+		-- remove multiline comments in a way that it does not break __LINE__ macro
+		if lcpp.FAST then
+			input = string.gsub(input, "/%*.-%*/", "") -- remove ml comments (stupid method)
+		else
+			local offset = 0
+			local output = {}
+			local starti, endi, match, lastendi
+			while offset do
+				starti, endi, match = input:find("/%*(.-)%*/", offset, false)
+				if starti then
+					lastendi = endi
+					local newlineCount = findn(match, "\n")
+					local newlines = string.rep("\n", newlineCount)
+					table.insert(output, input:sub(offset+1, starti-1))
+					table.insert(output, newlines)
+					offset = endi
+				else
+					offset = nil
+					table.insert(output, input:sub(lastendi+1 or 1))
+				end
+			end
+			input = table.concat(output, "")
+			--error(input)
+		end
 
 		return input
 end
@@ -946,7 +947,7 @@ function lcpp.test(suppressMsg)
 	--error(testlua)
 	assert(loadstring(testlua, "testlua"))()
 	lcpp_test.assertTrueCalls = findn(testlcpp, "lcpp_test.assertTrue()")
-	assert(lcpp_test.assertTrueCount == lcpp_test.assertTrueCalls, "assertTrueCalls: "..lcpp_test.assertTrueCount)
+	assert(lcpp_test.assertTrueCount == lcpp_test.assertTrueCalls, "assertTrue calls:"..lcpp_test.assertTrueCalls.." count:"..lcpp_test.assertTrueCount)
 	_G.lcpp_test = nil	-- delete ugly global hack
 	if not suppressMsg then print("Test run suscessully") end
 end
