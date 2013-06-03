@@ -97,10 +97,11 @@
 local lcpp = {}
 
 -- CONFIG
-lcpp.LCPP_LUA              = false   -- whether to use lcpp to preprocess Lua code (load, loadfile, loadstring...)
-lcpp.LCPP_FFI              = true    -- whether to use lcpp as LuaJIT ffi PreProcessor (if used in luaJIT)
-lcpp.LCPP_TEST             = false   -- whether to run lcpp unit tests when loading lcpp module
-lcpp.ENV                   = {}      -- static predefines (env-like)
+lcpp.LCPP_LUA         = false   -- whether to use lcpp to preprocess Lua code (load, loadfile, loadstring...)
+lcpp.LCPP_FFI         = true    -- whether to use lcpp as LuaJIT ffi PreProcessor (if used in luaJIT)
+lcpp.LCPP_TEST        = false   -- whether to run lcpp unit tests when loading lcpp module
+lcpp.ENV              = {}      -- static predefines (env-like)
+lcpp.FAST             = false   -- perf. tweaks when enabled. con: breaks minor stuff like __LINE__ macros
 
 -- PREDEFINES
 local __FILE__        = "__FILE__"
@@ -221,9 +222,9 @@ end
 -- returns the number of string occurrences
 local function findn(input, what)
 	local count = 0
-	local offset = 1
+	local offset = 0
 	while true do 
-			_, offset = string.find(input, what, offset, true)
+			_, offset = string.find(input, what, offset+1, true)
 			if not offset then return count end
 			count = count + 1
 	end
@@ -237,6 +238,7 @@ local function _tokenizer(str, setup)
 			["identifier"] = '^[_%a][_%w]*',
 			["number"] = '^[%+%-]?%d+[%.]?%d*',
 			["ignore"] = '^%s+', 
+			["string"] = true,
 			["keywords"] = { 
 				-- ["NAME"] = '^pattern',
 				-- ...
@@ -278,7 +280,7 @@ local function _tokenizer(str, setup)
 			coroutine.yield('number', tonumber(cut()), i1, i2)
 		elseif find(setup.identifier) then
 			coroutine.yield('identifier', cut(), i1, i2)
-		elseif find('^"[^"]*"') or find("^'[^']*'") then
+		elseif setup.string and (find('^"[^"]*"') or find("^'[^']*'")) then
 			-- strip the quotes
 			coroutine.yield('string', cut():sub(2,-2), i1, i2)
 		else -- any other unknown character
@@ -298,18 +300,45 @@ end
 -- PARSER
 -- ------------
 
+-- hint: LuaJIT ffi does not rely on us to remove the comments, but maybe other usecases
+local function removeComments(input)
+		-- remove multiline comments in a way that it does not break __LINE__ macro
+		--input = string.gsub(input, "/%*.-%*/", "") -- remove ml comments (stupid method)
+		local offset = 0
+		local output = {}
+		local starti, endi, match, lastendi
+		while offset do
+			starti, endi, match = input:find("/%*(.-)%*/", offset, false)
+			if starti then
+				lastendi = endi
+				local newlineCount = findn(match, "\n")
+				local newlines = string.rep("\n", newlineCount)
+				table.insert(output, input:sub(offset+1, starti-1))
+				table.insert(output, newlines)
+				offset = endi
+			else
+				offset = nil
+				table.insert(output, input:sub(lastendi+1 or 1))
+			end
+		end
+		input = table.concat(output, "")
+		--error(input)
+
+		input = string.gsub(input, "//.-\n", "\n") -- remove sl comments
+
+		return input
+end
+
 -- screener: revmoce comments, trim, ml concat...
 -- it only splits to cpp input lines and removes comments. it does not tokenize. 
 local function screener(input)
 	local function _screener(input)
-		-- remove comments
-		input = string.gsub(input, "/%*.-%*/", "") -- remove ml comments TODO: breaks __LINE__ somehow
-		input = string.gsub(input, "//.-\n", "\n") -- remove sl comments
-		
-		-- concat mulit-line input. TODO: breaks __LINE__ somehow
+		input = removeComments(input)
+
+		-- concat mulit-line input.
 		local count = 1
-		while count > 0 do input, count = string.gsub(input, "^(.-)\\\n(.-)$", "%1 %2") end
-		
+		while count > 0 do input, count = string.gsub(input, "^(.-)\\\n(.-)$", "%1 %2\n") end
+
 		-- trim and join blocks not starting with "#"
 		local buffer = {}
 		for line in gsplit(input, NEWL) do
@@ -323,8 +352,14 @@ local function screener(input)
 					end
 					coroutine.yield(line) 
 				else
-					table.insert(buffer, line) 
+					if lcpp.FAST then
+						table.insert(buffer, line) 
+					else
+						coroutine.yield(line) 
+					end
 				end
+			elseif not lcpp.FAST then
+				coroutine.yield(line) 
 			end
 		end
 		if #buffer > 0 then 
@@ -570,6 +605,7 @@ local LCPP_EXPR_SETUP = {
 	["identifier"] = '^[_%a][_%w]*',
 	["number"] = '^[%+%-]?%d+[%.]?%d*',
 	["ignore"] = '^%s+', 
+	["string"] = false, 
 	["keywords"] = { 
 		["NOT"] = '^!', 
 		["DEFINED"] = '^defined', 
@@ -795,94 +831,119 @@ function lcpp.test(suppressMsg)
 	}
 
 	local testlcpp = [[
+		assert(__LINE__ == 1, "_LINE_ macro test 1: __LINE__")
 		// This test uses LCPP with lua code (uncommon but possible)
+		assert(__LINE__ == 3, "_LINE_ macro test 3: __LINE__")
 		/* 
 		 * It therefore asserts any if/else/macro functions and various syntaxes
 		 * (including this comment, that would cause errors if not filtered)
 		 */
-	
+		assert(__LINE__ == 8, "_LINE_ macro test 8: __LINE__")
+
 		#define TRUE
 		#define LEET 0x1337
 		#pragma ignored
 	
 		lcpp_test.assertTrue()
 		assert(LEET == 0x1337, "simple #define replacement")
-		
+		local msg
+
+
+		msg = "#define if/else test"
 		#ifdef TRUE
 			lcpp_test.assertTrue()
 		#else
-			assert(false, "#define if/else test 1")
+			assert(false, msg.."1")
 		#endif
 		#ifdef NOTDEFINED
-			assert(false, "#define if/else test 2")
+			assert(false, msg.."2")
 		#endif
 		#ifndef NOTDEFINED
 			lcpp_test.assertTrue()
 		#else
-			assert(false, "#define if/else test 3")
+			assert(false, msg.."3")
 		#endif
 	
+
+		msg = "#if defined statement test"
 		#if defined(TRUE)
 			lcpp_test.assertTrue()
 		#else
-			assert(false, "#if defined statement test 1")
+			assert(false, msg.."1")
 		#endif
 		#if !defined(LEET) && !defined(TRUE)
-			assert(false, "#if defined statement test 2")
+			assert(false, msg.."2")
 		#endif
 		#if !defined(NOTLEET) && !defined(NOTDEFINED)
 			lcpp_test.assertTrue()
 		#else
-			assert(false, "#if defined statement test 3")
+			assert(false, msg.."3")
 		#endif
 		#if !(defined(LEET) && defined(TRUE))
 			lcpp_test.assertTrue()
 		#else
-			assert(false, "#if defined statement test 4")
+			assert(false, msg.."4")
 		#endif
+
 
 		# if defined TRUE 
 			lcpp_test.assertTrue() -- valid strange syntax test (spaces and missing brackets)
 		# endif
 
+
+		msg = "macro chaining"
 		#define FOO 123
 		#define BAR FOO+123
-		assert(BAR == 123*2, "macro chaining")
+		assert(BAR == 123*2, msg)
 
-		assert(__INDENT__ == 0, "indentation test 1")
+
+		msg = "indentation test"
+		assert(__INDENT__ == 0, msg.."1")
 		#if defined(TRUE)
-			assert(__INDENT__ == 1, "indentation test 2")
+			assert(__INDENT__ == 1, msg.."2")
 		#endif
-		assert(__INDENT__ == 0, "indentation test 7")
-		
+		assert(__INDENT__ == 0, msg.."3")
+
+
 		#define LCPP_FUNCTION_1(x, y) (x and not y)
 		assert(LCPP_FUNCTION_1(true, false), "function macro")
 		#define LCPP_FUNCTION_2(x, y) \
-			(not x and y)
+			(not x \
+			 and y)
 		assert(LCPP_FUNCTION_2(false, true), "multiline function macro")
 		
+		
+		msg = "#elif test"
 		#if defined(NOTDEFINED)
-			assert(false, "#elif test 1")
+			assert(false, msg.."1")
 		#elif defined(NOTDEFINED)
-			assert(false, "#elif test 2")
+			assert(false, msg.."2")
 		#elif defined(TRUE)
 			--l-cpp_test.assertTrue()
 		#else
-			assert(false, "#elif test 3")
+			assert(false, msg.."3")
 		#endif
 
+
+		msg = "#else if test"
 		#if defined(NOTDEFINED)
-			assert(false, "#else if test 1")
+			assert(false, msg.."1")
 		#else if defined(NOTDEFINED)
-			assert(false, "#else if test 2")
+			assert(false, msg.."2")
 		#else if defined(TRUE)
 			--l-cpp_test.assertTrue()
 		#else
-			assert(false, "#else if test 3")
+			assert(false, msg.."3")
 		#endif
+
+
+		/*
+		 assert(false, "multi-line comment not removed")
+		 */
 	]]
-	--error(testlua)
+	lcpp.FAST = false	-- to enable full valid output
 	local testlua = lcpp.compile(testlcpp)
+	--error(testlua)
 	assert(loadstring(testlua, "testlua"))()
 	lcpp_test.assertTrueCalls = findn(testlcpp, "lcpp_test.assertTrue()")
 	assert(lcpp_test.assertTrueCount == lcpp_test.assertTrueCalls, "assertTrueCalls: "..lcpp_test.assertTrueCount)
