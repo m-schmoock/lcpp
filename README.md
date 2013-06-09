@@ -34,23 +34,36 @@ But you can also preprocess any other stuff (even Lua code itself)
     
 ### Supports
 
-    #include
-    #define
-    #undef
-    #pragma
-    #error
-    #if 
-    #ifdef 
-    #ifndef
-    #else 
-    #else if 
-    #elif 
-    #endif
-    __LINE__
-    __FILE__
-    __DATE__
-    __TIME__
-    __LCPP_INDENT__
+    features:
+        transparent LuaJIT ffi extension
+        replacement macros
+        macro chaining
+        functional macros
+        multiline macros
+        expressions (defined(xyz) && ...)
+        concat operator ("##")
+        screen C single- and multiline comments
+        
+    directives:
+        #include
+        #define
+        #undef
+        #pragma
+        #error
+        #if 
+        #ifdef 
+        #ifndef
+        #else 
+        #else if 
+        #elif 
+        #endif
+        
+    macros:
+        __LINE__
+        __FILE__
+        __DATE__
+        __TIME__
+        __LCPP_INDENT__
 
 ### Make targets
     make test      # run the included test cases
