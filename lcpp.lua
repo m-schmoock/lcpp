@@ -729,8 +729,10 @@ function lcpp.init(input, predefines)
 		if state:getIndent() < 0 then error("Unopened block detected. Indentaion problem.") end
 	end
 	state.skip = function(state)
-		if #state.stack == 0 then return false end
-		return not state.stack[#state.stack]
+		for i = 1, #state.stack do
+			if not state.stack[i] then return true end
+		end
+		return false
 	end
 	state.getLine = function(state)
 		state.lineno = state.lineno + 1
@@ -929,9 +931,14 @@ function lcpp.test(suppressMsg)
 		#else
 			assert(false, msg.."3")
 		#endif
+		#ifdef NOTDEFINED
+			#ifdef TRUE
+				assert(false, msg.."4")
+			#endif
+		#endif
 
 	]]
-	lcpp.FAST = false	-- to enable full valid output
+	lcpp.FAST = false	-- enable full valid output for testing
 	local testlua = lcpp.compile(testlcpp)
 	assert(loadstring(testlua, "testlua"))()
 	lcpp_test.assertTrueCalls = findn(testlcpp, "lcpp_test.assertTrue()")
