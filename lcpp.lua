@@ -64,6 +64,8 @@
 --
 --## TODOs:
 --	- lcpp.LCPP_LUA for: load, loadfile
+--	- "#" operator for stringification
+--	- literal concatenation: "foo" "bar" -> "foobar"
 --
 --## License (MIT)
 -- -----------------------------------------------------------------------------
