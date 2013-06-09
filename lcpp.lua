@@ -108,7 +108,7 @@ local __FILE__        = "__FILE__"
 local __LINE__        = "__LINE__"
 local __DATE__        = "__DATE__"
 local __TIME__        = "__TIME__"
-local __INDENT__      = "__INDENT__"
+local __LCPP_INDENT__ = "__LCPP_INDENT__"
 
 -- BNF LEAVES
 local ENDL            = "$"
@@ -162,12 +162,11 @@ local TRUEMACRO = STARTL.."("..IDENTIFIER..")%s*$"
 local REPLMACRO = STARTL.."("..IDENTIFIER..")"..WHITESPACES.."(.+)$"
 local FUNCMACRO = STARTL.."("..IDENTIFIER..")%s*%(([%s%w,]*)%)%s*(.*)"
 
--- current state for debugging the last operation
-lcpp.STATE = {lineno = 0}
 
 -- ------------
 -- LOCAL UTILS
 -- ------------
+lcpp.STATE = {lineno = 0} -- current state for debugging the last operation
 local function error(msg) _G.print(debug.traceback()); _G.error(string.format("lcpp ERR [%04i] %s", lcpp.STATE.lineno, msg)) end
 local function print(msg) _G.print(string.format("lcpp INF [%04i] %s", lcpp.STATE.lineno, msg)) end
 
@@ -231,8 +230,7 @@ end
 
 -- a lightweight and flexible tokenizer
 local function _tokenizer(str, setup)
-	if not setup then
-		setup = {
+		local defsetup = {
 			-- EXAMPLE patterns have to be pretended with "^" for the tokenizer
 			["identifier"] = '^[_%a][_%w]*',
 			["number"] = '^[%+%-]?%d+[%.]?%d*',
@@ -243,8 +241,15 @@ local function _tokenizer(str, setup)
 				-- ...
 			},
 		}
+	if not setup then
+		setup = defsetup
 	end
-	
+	setup.identifier = setup.identifier or defsetup.identifier
+	setup.number = setup.number or defsetup.number
+	setup.ignore = setup.number or defsetup.ignore
+	if nil == setup.string then setup.string = true end
+	setup.keywords = setup.keywords or {}
+
 	local strlen = #str
 	local i = 1
 	local i1, i2
@@ -375,10 +380,10 @@ end
 local function apply(state, input)
 	local out = {}
 	local functions = {}
-	for k, v, start, end_ in tokenizer(input) do
+	for k, v, start, end_ in tokenizer(input, {string = true}) do
 		if k == "identifier" then 
 			local repl = v
-			local macro = state:defined(v) 
+			local macro = state.defines[v] 
 			if macro then
 				if type(macro) == "boolean" then
 					repl = ""
@@ -420,67 +425,23 @@ local function processLine(state, line)
 		local elseif_ = cmd:match(ELSEIF)
 		local else_   = cmd:match(ELSE)
 		local endif   = cmd:match(ENDIF)
-
-		local struct        = ifdef or ifexp or ifndef or elif or elseif_ or else_ or endif
-		local struct_open   = ifdef or ifexp or ifndef
-		local struct_reopen = elif or elseif_ or else_
-		local struct_close  = true and endif
-
-		--[[
-		-- set block depth
-		if struct_open  then state:incLvl() end
-		if struct_close then state:decLvl() end
-		if state.skip >= state.level then return end
-
-		-- set skipping
+		local struct  = ifdef or ifexp or ifndef or elif or elseif_ or else_ or endif
+		
 		if struct then 
-			state.skip = state.level
-			if state.elseSkip == -1 then
-				if ifdef   and state:defined(ifdef)      then state.skip = -1; state.elseSkip = state.level end
-				if ifndef  and not state:defined(ifndef) then state.skip = -1; state.elseSkip = state.level end
-				if ifexp   and state:parseExpr(ifexp)    then state.skip = -1; state.elseSkip = state.level end
-				if elif    and state:parseExpr(elif)     then state.skip = -1; state.elseSkip = state.level end
-				if elseif_ and state:parseExpr(elseif_)  then state.skip = -1; state.elseSkip = state.level end
-				if else_   then state.skip = state.elseSkip end
-			end
+			if ifdef   then state:openBlock(state:defined(ifdef))      end
+			if ifexp   then state:openBlock(state:parseExpr(ifexp))    end
+			if ifndef  then state:openBlock(not state:defined(ifndef)) end
+			if elif    then state:elseBlock(state:parseExpr(elif))     end
+			if elseif_ then state:elseBlock(state:parseExpr(elseif_))  end
+			if else_   then state:elseBlock(true)                      end
+			if endif   then state:closeBlock()                         end
+			return -- remove structural directives
 		end
-		]]--
-
-		-- inc block depth
-		if struct_open or struct_reopen then state:incLvl() end
-		-- clear else skipping
-		if endif then if state.level == state.elseSkip then state.elseSkip = -1 end end
-		if endif or else_ or elif or elseif_ then
-			-- clear skip if end of block reached
-			if state.level == state.skip then state.skip = -1 end
-			state:decLvl()
-		end
-		-- set skipping mode if directive evaluates to false and not already skipping
-		if state.skip == -1 then
-			if ifdef   and not state:defined(ifdef)     then state.skip = state.level end
-			if ifndef  and     state:defined(ifndef)    then state.skip = state.level end
-			if ifexp   and not state:parseExpr(ifexp)   then state.skip = state.level end
-			if elif    and not state:parseExpr(elif)    then state.skip = state.level end
-			if elseif_ and not state:parseExpr(elseif_) then state.skip = state.level end
-		end
-		-- same with else blocks
-		if state.elseSkip == -1 then
-			if ifdef   and     state:defined(ifdef)     then state.elseSkip = state.level end 
-			if ifndef  and not state:defined(ifndef)    then state.elseSkip = state.level end
-			if ifexp   and     state:parseExpr(ifexp)   then state.elseSkip = state.level end
-			if elif    and     state:parseExpr(elif)    then state.elseSkip = state.level end
-			if elseif_ and     state:parseExpr(elseif_) then state.elseSkip = state.level end
-		end
-		if else_ then
-			-- activate else skipping if activated from prior directive
-			if state.elseSkip == state.level then state.skip = state.level end
-		end
-		-- remove structural directives
-		if struct then return end
 	end
-	
+
+
 	--[[ SKIPPING ]]-- 
-	if state.skip >= 0 and state.level >= state.skip then return end
+	if state:skip() then return end
 	
 
 	--[[ READ NEW DIRECTIVES ]]--
@@ -530,10 +491,8 @@ local function processLine(state, line)
 			return
 		end
 		
-		if cmd:match(PRAGMA) then
-			-- ignore, because we dont have any pragma directives yet
-			return
-		end
+		-- ignore, because we dont have any pragma directives yet
+		if cmd:match(PRAGMA) then return end
 		
 		-- abort on unknown keywords
 		error("unknown directive: "..line)
@@ -542,8 +501,6 @@ local function processLine(state, line)
 	
 	--[[ APPLY MACROS ]]--
 	line = state:apply(line);
-	-- cmd may have changed due to macros (TODO: really?)
-	--if line:byte(1) == CMD_BYTE then cmd = line:sub(2) end
 	
 	return line
 end
@@ -551,14 +508,15 @@ end
 local function doWork(state)
 	local function _doWork(state)
 		if not state:defined(__FILE__) then state:define(__FILE__, "<USER_CHUNK>", true) end
-		local indentLevel = state.level
-		local input = nil
-		repeat
-			 input = state:getLine()
-			 local output = processLine(state, input)
-			 if output then coroutine.yield(output) end
-		until input == nil
-		if (indentLevel ~= state.level) then error("indentation level must be balanced within a file. was:"..indentLevel.." is:"..state.level) end
+		local oldIndent = state:getIndent()
+		while true do
+			local input = state:getLine()
+			if not input then break end
+			local output = processLine(state, input)
+			if not lcpp.FAST and not output then output = "" end -- "-- "..input end -- output empty skipped lines
+			if output then coroutine.yield(output) end
+		end
+		if (oldIndent ~= state:getIndent()) then error("indentation level must be balanced within a file. was:"..oldIndent.." is:"..state:getIndent()) end
 	end
 	return coroutine.wrap(function() _doWork(state) end)
 end
@@ -602,18 +560,16 @@ end
 --  NOT -> "!"
 --  IDENTIFIER -> "[0-9a-zA-Z_]"
 --
-local LCPP_EXPR_SETUP = {
-	["identifier"] = '^[_%a][_%w]*',
-	["number"] = '^[%+%-]?%d+[%.]?%d*',
-	["ignore"] = '^%s+', 
-	["string"] = false, 
-	["keywords"] = { 
-		["NOT"] = '^!', 
-		["DEFINED"] = '^defined', 
-		["BROPEN"] = '^[(]', 
-		["BRCLOSE"] = '^[)]', 
-		["AND"] = '^&&', 
-		["OR"] = '^||',
+
+local LCPP_TOKENIZE_EXPR = {
+	string = false,
+	keywords = { 
+		NOT = '^!', 
+		DEFINED = '^defined', 
+		BROPEN = '^[(]', 
+		BRCLOSE = '^[)]', 
+		AND = '^&&', 
+		OR = '^||',
 	},
 }
 
@@ -647,7 +603,7 @@ end
 
 local function parseExpr(state, input) 
 	-- first call gets string input. rest uses tokenizer
-	if type(input) == "string" then input = tokenizer(input, LCPP_EXPR_SETUP) end
+	if type(input) == "string" then input = tokenizer(input, LCPP_TOKENIZE_EXPR) end
 	local result = false
 	local _not = false
 	
@@ -732,13 +688,12 @@ end
 --- initialies a lcpp state. not needed manually. handy for testing
 function lcpp.init(input, predefines)
 	-- create sate var
-	local state     = {}
-	state.defines   = {}     				-- the table of known defines and replacements
+	local state     = {}              -- init the state object
+	state.defines   = {}              -- the table of known defines and replacements
 	state.screener  = screener(input)
-	state.lineno    = 0                    -- the current line number
-	state.level     = 0                    -- indentation level for ifdefs and such
-	state.skip      = -1
-	state.elseSkip  = -1
+	state.lineno    = 0               -- the current line number
+	state.stack     = {}              -- stores wether the current stack level is to be included
+	state.once      = {}              -- stack level was once true (first if that evals to true)
 	
 	-- funcs
 	state.define = define
@@ -746,19 +701,36 @@ function lcpp.init(input, predefines)
 		state:define(key, nil)
 	end
 	state.defined = function(state, key)
-		return state.defines[key]
+		return state.defines[key] ~= nil
 	end
 	state.apply = apply
 	state.includeFile = includeFile
 	state.doWork = doWork
-	state.incLvl = function(state)
-		state.level = state.level + 1
-		state:define(__INDENT__, state.level, true)
+	state.getIndent = function(state)
+		return #state.stack
 	end
-	state.decLvl = function(state)
-		state.level = state.level - 1
-		state:define(__INDENT__, state.level, true)
-		if state.level < 0 then error("Unopened block detected. Indentaion problem.") end
+	state.openBlock = function(state, bool)
+		state.stack[#state.stack+1] = bool
+		state.once [#state.once+1]  = bool
+		state:define(__LCPP_INDENT__, state:getIndent(), true)
+	end
+	state.elseBlock = function(state, bool)
+		if state.once[#state.once] then
+			state.stack[#state.stack] = false
+		else
+			state.stack[#state.stack] = bool
+			if bool then state.once[#state.once] = true end
+		end
+	end
+	state.closeBlock = function(state)
+		state.stack[#state.stack] = nil
+		state.once [#state.once]  = nil
+		state:define(__LCPP_INDENT__, state:getIndent(), true)
+		if state:getIndent() < 0 then error("Unopened block detected. Indentaion problem.") end
+	end
+	state.skip = function(state)
+		if #state.stack == 0 then return false end
+		return not state.stack[#state.stack]
 	end
 	state.getLine = function(state)
 		state.lineno = state.lineno + 1
@@ -772,7 +744,7 @@ function lcpp.init(input, predefines)
 	state:define(__DATE__, os.date("%B %d %Y"), true)
 	state:define(__TIME__, os.date("%H:%M:%S"), true)
 	state:define(__LINE__, state.lineno, true)
-	state:define(__INDENT__, state.level, true)
+	state:define(__LCPP_INDENT__, state:getIndent(), true)
 	predefines = predefines or {}
 	for k,v in pairs(lcpp.ENV) do	state:define(k, v, true) end	-- static ones
 	for k,v in pairs(predefines) do	state:define(k, v, true) end
@@ -794,7 +766,9 @@ function lcpp.compile(code, predefines)
 	for output in state:doWork() do
 		table.insert(buf, output)
 	end
-	return table.concat(buf, NEWL), state
+	local output = table.concat(buf, NEWL)
+	--print(output)
+	return output, state
 end
 
 --- preprocesses a file
@@ -840,6 +814,9 @@ function lcpp.test(suppressMsg)
 		 * (including this comment, that would cause errors if not filtered)
 		 */
 		assert(__LINE__ == 8, "_LINE_ macro test 8: __LINE__")
+		/*
+		 assert(false, "multi-line comment not removed")
+		 */
 
 		#define TRUE
 		#define LEET 0x1337
@@ -850,6 +827,11 @@ function lcpp.test(suppressMsg)
 		local msg
 
 
+		# if defined TRUE 
+			lcpp_test.assertTrue() -- valid strange syntax test (spaces and missing brackets)
+		# endif
+
+
 		msg = "#define if/else test"
 		#ifdef TRUE
 			lcpp_test.assertTrue()
@@ -858,6 +840,8 @@ function lcpp.test(suppressMsg)
 		#endif
 		#ifdef NOTDEFINED
 			assert(false, msg.."2")
+		#else
+			lcpp_test.assertTrue()
 		#endif
 		#ifndef NOTDEFINED
 			lcpp_test.assertTrue()
@@ -887,11 +871,6 @@ function lcpp.test(suppressMsg)
 		#endif
 
 
-		# if defined TRUE 
-			lcpp_test.assertTrue() -- valid strange syntax test (spaces and missing brackets)
-		# endif
-
-
 		msg = "macro chaining"
 		#define FOO 123
 		#define BAR FOO+123
@@ -899,11 +878,11 @@ function lcpp.test(suppressMsg)
 
 
 		msg = "indentation test"
-		assert(__INDENT__ == 0, msg.."1")
+		assert(__LCPP_INDENT__ == 0, msg.."1")
 		#if defined(TRUE)
-			assert(__INDENT__ == 1, msg.."2")
+			assert(__LCPP_INDENT__ == 1, msg.."2")
 		#endif
-		assert(__INDENT__ == 0, msg.."3")
+		assert(__LCPP_INDENT__ == 0, msg.."3")
 
 
 		#define LCPP_FUNCTION_1(x, y) (x and not y)
@@ -920,7 +899,7 @@ function lcpp.test(suppressMsg)
 		#elif defined(NOTDEFINED)
 			assert(false, msg.."2")
 		#elif defined(TRUE)
-			--l-cpp_test.assertTrue()
+			lcpp_test.assertTrue()
 		#else
 			assert(false, msg.."3")
 		#endif
@@ -932,19 +911,28 @@ function lcpp.test(suppressMsg)
 		#else if defined(NOTDEFINED)
 			assert(false, msg.."2")
 		#else if defined(TRUE)
-			--l-cpp_test.assertTrue()
+			lcpp_test.assertTrue()
 		#else
 			assert(false, msg.."3")
 		#endif
 
 
-		/*
-		 assert(false, "multi-line comment not removed")
-		 */
+		msg = "bock stack tree test"
+		#ifdef TRUE
+			#ifdef NOTDEFINED
+				assert(false, msg.."1")
+			#elif defined(TRUE)
+				lcpp_test.assertTrue()
+			#else
+				assert(false, msg.."2")
+			#endif
+		#else
+			assert(false, msg.."3")
+		#endif
+
 	]]
 	lcpp.FAST = false	-- to enable full valid output
 	local testlua = lcpp.compile(testlcpp)
-	--error(testlua)
 	assert(loadstring(testlua, "testlua"))()
 	lcpp_test.assertTrueCalls = findn(testlcpp, "lcpp_test.assertTrue()")
 	assert(lcpp_test.assertTrueCount == lcpp_test.assertTrueCalls, "assertTrue calls:"..lcpp_test.assertTrueCalls.." count:"..lcpp_test.assertTrueCount)
