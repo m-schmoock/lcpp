@@ -6,7 +6,7 @@
 This module offers a standard preprocessor for C code in pure Lua. 
 The primary usecase is to enable LuaJIT ffi preprocessing.
 But you can also preprocess any other stuff (even Lua code itself)
-
+    
 ### Links
  * Project page   http://lcpp.schmoock.net
  * GitHub Page    https://github.com/willsteel/lcpp
@@ -31,6 +31,26 @@ But you can also preprocess any other stuff (even Lua code itself)
             wchar_t        path[MAXPATH];
         } t_exe;
     ]])
+    
+### Supports
+
+    #include
+    #define
+    #undef
+    #pragma
+    #error
+    #if 
+    #ifdef 
+    #ifndef
+    #else 
+    #else if 
+    #elif 
+    #endif
+    __LINE__
+    __FILE__
+    __DATE__
+    __TIME__
+    __LCPP_INDENT__
 
 ### Make targets
     make test      # run the included test cases
