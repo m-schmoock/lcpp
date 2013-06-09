@@ -63,10 +63,6 @@
 --	DIRECTIVE_CONTENT := ".*?"
 --
 --## TODOs:
---	- "##" cpp string operators:
---	  i.e.: #define DECLARE_HANDLE(name) struct name##__ { int unused; }; typedef struct name##__ *name
---	  Should expand to:  struct HINSTANCE__ { int unused; }; typedef struct HINSTANCE__ *HINSTANCE;
---	  "The ## is the pre-processor token pasting operator.The left token is appended with the right token."
 --	- lcpp.LCPP_LUA for: load, loadfile
 --
 --## License (MIT)
@@ -101,6 +97,7 @@ lcpp.LCPP_FFI         = true    -- whether to use lcpp as LuaJIT ffi PreProcesso
 lcpp.LCPP_TEST        = false   -- whether to run lcpp unit tests when loading lcpp module
 lcpp.ENV              = {}      -- static predefines (env-like)
 lcpp.FAST             = false   -- perf. tweaks when enabled. con: breaks minor stuff like __LINE__ macros
+lcpp.DEBUG            = false
 
 -- PREDEFINES
 local __FILE__        = "__FILE__"
@@ -379,12 +376,14 @@ end
 local function apply(state, input)
 	local out = {}
 	local functions = {}
-	for k, v, start, end_ in tokenizer(input, {string = true}) do
+	local setup = {string = true}
+
+	for k, v, start, end_ in tokenizer(input, setup) do
 		if k == "identifier" then 
 			local repl = v
 			local macro = state.defines[v] 
 			if macro then
-				if type(macro) == "boolean" then
+				if type(macro)     == "boolean" then
 					repl = ""
 				elseif type(macro) == "string" then
 					repl = macro
@@ -512,7 +511,8 @@ local function doWork(state)
 			local input = state:getLine()
 			if not input then break end
 			local output = processLine(state, input)
-			if not lcpp.FAST and not output then output = "" end -- "-- "..input end -- output empty skipped lines
+			if not lcpp.FAST and not output then output = "" end -- output empty skipped lines
+			if lcpp.DEBUG then output = output.." -- "..input end -- input as comment when DEBUG
 			if output then coroutine.yield(output) end
 		end
 		if (oldIndent ~= state:getIndent()) then error("indentation level must be balanced within a file. was:"..oldIndent.." is:"..state:getIndent()) end
@@ -578,15 +578,15 @@ local function parseDefined(state, input)
 	local brclose = false
 	local ident = nil
 	
-	for type, value in input do
-		if type == "BROPEN" then
+	for key, value in input do
+		if key == "BROPEN" then
 			bropen = true
 		end
-		if type == "identifier" then
+		if key == "identifier" then
 			 ident = value
 			 if not bropen then break end
 		end
-		if type == "BRCLOSE" and ident then
+		if key == "BRCLOSE" and ident then
 			brclose = true
 			break
 		end
@@ -641,8 +641,11 @@ local function parseFunction(state, inputStr)
 	local name, argsstr, repl = inputStr:match(FUNCMACRO)
 	if not name or not argsstr or not repl then return end
 
-	-- apply macros to replacement first
+	-- apply macros to replacement first (chaining)
 	repl = state:apply(repl);
+
+	-- apply ## concat operator
+	repl = repl:gsub("##", "")
 
 	-- rename args to "%1" "%2" .. for later gsub
 	local noargs = 0
@@ -670,9 +673,8 @@ local function parseFunction(state, inputStr)
 		pattern = table.concat(buf)
 	end
 	
-	-- build funcion
+	-- build macro funcion
 	local func = function(input)
-		-- check input for this macro. else return input
 		return input:gsub(pattern, repl)
 	end
 	
@@ -768,7 +770,7 @@ function lcpp.compile(code, predefines)
 		table.insert(buf, output)
 	end
 	local output = table.concat(buf, NEWL)
-	--print(output)
+	if lcpp.DEBUG then print(output) end
 	return output, state
 end
 
@@ -935,6 +937,11 @@ function lcpp.test(suppressMsg)
 				assert(false, msg.."4")
 			#endif
 		#endif
+
+		msg = "test concat ## operator"
+		#define CONCAT_TEST() foo##bar
+		local CONCAT_TEST() = "blubb"
+		--assert(foobar == "blubb", msg)
 
 	]]
 	lcpp.FAST = false	-- enable full valid output for testing
