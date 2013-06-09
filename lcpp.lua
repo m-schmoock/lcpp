@@ -63,10 +63,10 @@
 --	DIRECTIVE_CONTENT := ".*?"
 --
 --## TODOs:
---	- "#" and "##" cpp string operators:
+--	- "##" cpp string operators:
 --	  i.e.: #define DECLARE_HANDLE(name) struct name##__ { int unused; }; typedef struct name##__ *name
 --	  Should expand to:  struct HINSTANCE__ { int unused; }; typedef struct HINSTANCE__ *HINSTANCE;
---	- The ## is the pre-processor token pasting operator.The left token is appended with the right token.
+--	  "The ## is the pre-processor token pasting operator.The left token is appended with the right token."
 --	- lcpp.LCPP_LUA for: load, loadfile
 --
 --## License (MIT)
