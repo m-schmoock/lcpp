@@ -326,7 +326,7 @@ local function removeComments(input)
 					table.insert(output, input:sub((lastendi or 0) + 1))
 				end
 			end
-			input = table.concat(output, "")
+			input = table.concat(output)
 			--error(input)
 		end
 
@@ -378,9 +378,8 @@ end
 local function apply(state, input)
 	local out = {}
 	local functions = {}
-	local setup = {string = true}
 
-	for k, v, start, end_ in tokenizer(input, setup) do
+	for k, v, start, end_ in tokenizer(input) do
 		if k == "identifier" then 
 			local repl = v
 			local macro = state.defines[v] 
@@ -534,10 +533,7 @@ end
 local function define(state, key, value, override)
 	--print("define:"..key.." type:"..type(value))
 	if not override and state:defined(key) then error("already defined: "..key) end
-
-	-- apply macros to replacement, so macro chaining works
-	if type(value) == "string" then value = state:apply(value) end
-
+	value = state:prepareMacro(value)
 	state.defines[key] = value
 end
 
@@ -562,6 +558,12 @@ end
 --  IDENTIFIER -> "[0-9a-zA-Z_]"
 --
 
+local LCPP_TOKENIZE_MACRO = {
+	string = true,
+	keywords = { 
+		CONCAT = "^##",
+	},
+}
 local LCPP_TOKENIZE_EXPR = {
 	string = false,
 	keywords = { 
@@ -638,18 +640,29 @@ local function parseExpr(state, input)
 	return result
 end
 
+-- apply macros chaining and string ops "##" and "#"
+local function prepareMacro(state, input)
+	if type(input) ~= "string" then return input end
+	input = state:apply(input)
+	local out = {}
+	for k, v, start, end_ in tokenizer(input, LCPP_TOKENIZE_MACRO) do
+		if k == "CONCAT" then
+			-- remove concat op "##"
+		else
+			table.insert(out, input:sub(start, end_))
+		end
+	end
+	return table.concat(out)
+end
+
 -- i.e.: "MAX(x, y) (((x) > (y)) ? (x) : (y))"
-local function parseFunction(state, inputStr)
-	local name, argsstr, repl = inputStr:match(FUNCMACRO)
+local function parseFunction(state, input)
+	if not input then return end
+	local name, argsstr, repl = input:match(FUNCMACRO)
 	if not name or not argsstr or not repl then return end
+	repl = state:prepareMacro(repl)
 
-	-- apply macros to replacement first (chaining)
-	repl = state:apply(repl);
-
-	-- apply ## concat operator
-	repl = repl:gsub("##", "")
-
-	-- rename args to "%1" "%2" .. for later gsub
+	-- rename args to %1,%2... for later gsub
 	local noargs = 0
 	for argname in argsstr:gmatch(IDENTIFIER) do
 		noargs = noargs + 1
@@ -742,6 +755,7 @@ function lcpp.init(input, predefines)
 		state:define(__LINE__, state.lineno, true)
 		return state.screener()
 	end
+	state.prepareMacro = prepareMacro
 	state.parseExpr = parseExpr
 	state.parseFunction = parseFunction
 	
@@ -941,9 +955,15 @@ function lcpp.test(suppressMsg)
 		#endif
 
 		msg = "test concat ## operator"
-		#define CONCAT_TEST() foo##bar
-		local CONCAT_TEST() = "blubb"
-		--assert(foobar == "blubb", msg)
+		#define CONCAT_TEST1 foo##bar
+		local CONCAT_TEST1 = "blubb"
+		assert(foobar == "blubb", msg)
+		#define CONCAT_TEST2() bar##foo
+		local CONCAT_TEST2() = "blubb"
+		assert(barfoo == "blubb", msg)
+		-- dont process ## within strings
+		#define CONCAT_TEST3 "foo##bar" 
+		assert(CONCAT_TEST3 == "foo##bar", msg)
 
 	]]
 	lcpp.FAST = false	-- enable full valid output for testing
