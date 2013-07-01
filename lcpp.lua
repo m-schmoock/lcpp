@@ -532,7 +532,7 @@ end
 -- sets a global define
 local function define(state, key, value, override)
 	--print("define:"..key.." type:"..type(value))
-	if not override and state:defined(key) then error("already defined: "..key) end
+	if value and not override and state:defined(key) then error("already defined: "..key) end
 	value = state:prepareMacro(value)
 	state.defines[key] = value
 end
@@ -964,6 +964,13 @@ function lcpp.test(suppressMsg)
 		-- dont process ## within strings
 		#define CONCAT_TEST3 "foo##bar" 
 		assert(CONCAT_TEST3 == "foo##bar", msg)
+
+		msg = "#undef test"
+		#define UNDEF_TEST 
+		#undef UNDEF_TEST
+		#ifdef UNDEF_TEST
+			assert(false, msg)
+		#endif
 
 	]]
 	lcpp.FAST = false	-- enable full valid output for testing
