@@ -15,7 +15,7 @@ But you can also preprocess any other stuff (even Lua code itself)
  * Sponsored by   http://mmbbq.org
 
 ### Usage
-    -- load lcpp (ffi and tests turned on per default)
+    -- load lcpp (ffi.cdef wrapper turned on per default)
     local lcpp = require("lcpp")
         
     -- just use LuaJIT ffi and lcpp together
