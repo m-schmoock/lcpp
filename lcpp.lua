@@ -533,7 +533,11 @@ end
 local function define(state, key, value, override)
 	--print("define:"..key.." type:"..type(value))
 	if value and not override and state:defined(key) then error("already defined: "..key) end
-	value = state:prepareMacro(value)
+	local cc
+	repeat
+		-- when concat occurs, new macro chaining may occur
+		value,cc = state:prepareMacro(value)
+	until not cc
 	state.defines[key] = value
 end
 
@@ -645,22 +649,25 @@ local function prepareMacro(state, input)
 	if type(input) ~= "string" then return input end
 	input = state:apply(input)
 	local out = {}
+	local concat
 	for k, v, start, end_ in tokenizer(input, LCPP_TOKENIZE_MACRO) do
 		if k == "CONCAT" then
 			-- remove concat op "##"
+			concat = true
 		else
 			table.insert(out, input:sub(start, end_))
 		end
 	end
-	return table.concat(out)
+	return table.concat(out), concat
 end
 
 -- i.e.: "MAX(x, y) (((x) > (y)) ? (x) : (y))"
 local function parseFunction(state, input)
 	if not input then return end
+	local concat
 	local name, argsstr, repl = input:match(FUNCMACRO)
 	if not name or not argsstr or not repl then return end
-	repl = state:prepareMacro(repl)
+	repl,concat = state:prepareMacro(repl)
 
 	-- rename args to %1,%2... for later gsub
 	local noargs = 0
@@ -689,7 +696,15 @@ local function parseFunction(state, input)
 	end
 	
 	-- build macro funcion
-	local func = function(input)
+	local func = concat and function (input)
+		local value = input:gsub(pattern, repl)
+		local cc
+		repeat
+			-- when concat occurs, new macro chaining may occur
+			value, cc = state:prepareMacro(value)
+		until not cc
+		return value
+	end or function(input)
 		return input:gsub(pattern, repl)
 	end
 	
@@ -894,6 +909,9 @@ function lcpp.test(suppressMsg)
 		#define FOO 123
 		#define BAR FOO+123
 		assert(BAR == 123*2, msg)
+		#define BAZ 456
+		#define BLUR BA##Z
+		assert(BLUR == 456, msg)
 
 
 		msg = "indentation test"
@@ -964,6 +982,10 @@ function lcpp.test(suppressMsg)
 		-- dont process ## within strings
 		#define CONCAT_TEST3 "foo##bar" 
 		assert(CONCAT_TEST3 == "foo##bar", msg)
+		msg = "test concat inside func type macro"
+		#define CONCAT_TEST4(baz) CONCAT_TEST##baz
+		local CONCAT_TEST4(1) = "bazbaz"
+		assert(foobar == "bazbaz", msg)
 
 		msg = "#undef test"
 		#define UNDEF_TEST 
