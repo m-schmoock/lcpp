@@ -125,6 +125,9 @@ local IDENTIFIER      = "[_%a][_%w]*"
 local NOIDENTIFIER    = "[^%w_]+"
 local FILENAME        = "[0-9a-zA-Z.-_/\\]+"
 local TEXT            = ".+"
+local STRINGIFY       = "#"
+local STRINGIFY_BYTE  = STRINGIFY:byte(1)
+local STRING_LITERAL  = ".*"
 
 -- BNF WORDS
 local _INCLUDE        = "include"
@@ -224,6 +227,12 @@ local function findn(input, what)
 			if not offset then return count end
 			count = count + 1
 	end
+end
+
+-- C literal string concatenation
+local function concatStringLiteral(input)
+	-- screener does remove multiline definition, so just check ".*"%s*".*" pattern
+	return input:gsub("\"("..STRING_LITERAL..")\""..OPTSPACES.."\"("..STRING_LITERAL..")\"", "\"%1%2\"")
 end
 
 -- a lightweight and flexible tokenizer
@@ -404,7 +413,8 @@ local function apply(state, input)
 		input = func(input)
 	end
 
-	return input
+	-- C liberal string concatenation
+	return concatStringLiteral(input)
 end
 
 -- processes an input line. called from lcpp doWork loop
@@ -676,7 +686,9 @@ local function parseFunction(state, input)
 	local noargs = 0
 	for argname in argsstr:gmatch(IDENTIFIER) do
 		noargs = noargs + 1
-		repl = repl:gsub(argname, "%%"..noargs)
+		repl = repl:gsub("#?"..argname, function (s)
+			return (s:byte(1) == STRINGIFY_BYTE) and ("\"%"..noargs.."\"") or ("%"..noargs)
+		end)
 	end
 	
 	-- build pattern string:  name(arg, arg, ...)
@@ -1000,6 +1012,13 @@ function lcpp.test(suppressMsg)
 		#ifdef UNDEF_TEST
 			assert(false, msg)
 		#endif
+
+		msg = "stringify operator(#) test"
+		#define STRINGIFY(str) #str
+		assert(STRINGIFY(abcde) == "abcde", msg)
+		#define STRINGIFY_AND_CONCAT(str1, str2) #str1 ## \
+		#str2
+		assert(STRINGIFY_AND_CONCAT(fgh, ij) == "fghij", msg)
 
 	]]
 	lcpp.FAST = false	-- enable full valid output for testing
