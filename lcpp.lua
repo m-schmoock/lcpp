@@ -158,7 +158,7 @@ local PRAGMA          = STARTL.._PRAGMA
 -- speedups
 local TRUEMACRO = STARTL.."("..IDENTIFIER..")%s*$"
 local REPLMACRO = STARTL.."("..IDENTIFIER..")"..WHITESPACES.."(.+)$"
-local FUNCMACRO = STARTL.."("..IDENTIFIER..")%s*%(([%s%w,]*)%)%s*(.*)"
+local FUNCMACRO = STARTL.."("..IDENTIFIER..")%(([_%s%w,]*)%)%s*(.*)"
 
 
 -- ------------
@@ -473,18 +473,21 @@ local function processLine(state, line)
 			macroname = define:match(TRUEMACRO)
 			if macroname then
 				state:define(macroname, true)
-			end
+			else
 	
 			-- replace macro defines
 			macroname, replacement = define:match(REPLMACRO)
 			if macroname and replacement then
 				state:define(macroname, replacement)
-			end
+			else
 	
 			-- read functional macros
 			macroname, replacement = state:parseFunction(define)
 			if macroname and replacement then
 				state:define(macroname, replacement)
+			end
+
+			end
 			end
 			
 			return
@@ -928,7 +931,11 @@ function lcpp.test(suppressMsg)
 			(not x \
 			 and y)
 		assert(LCPP_FUNCTION_2(false, true), "multiline function macro")
-		
+		#define LCPP_FUNCTION_3(_x, _y) LCPP_FUNCTION_2(_x, _y)
+		assert(LCPP_FUNCTION_3(false, true), "multiline function macro with argname contains _")
+		#define LCPP_NOT_FUNCTION (BLUR)
+		assert(LCPP_NOT_FUNCTION == 456, "if space between macro name and argument definition exists, it is regarded as replacement macro")
+	
 		
 		msg = "#elif test"
 		#if defined(NOTDEFINED)
