@@ -253,7 +253,7 @@ local function _tokenizer(str, setup)
 	end
 	setup.identifier = setup.identifier or defsetup.identifier
 	setup.number = setup.number or defsetup.number
-	setup.ignore = setup.number or defsetup.ignore
+	setup.ignore = setup.ignore or defsetup.ignore
 	if nil == setup.string then setup.string = true end
 	setup.keywords = setup.keywords or {}
 
@@ -581,6 +581,14 @@ local LCPP_TOKENIZE_MACRO = {
 		CONCAT = "^##",
 	},
 }
+local LCPP_TOKENIZE_MACRO_ARGS = {
+	string = true,
+	keywords = { 
+		FUNCTIONAL_ARG = '^' .. IDENTIFIER .. "%s*%b()",
+		STRING_ARG = '^"[^"]*"',
+		NUMBER_ARG = '^[%+%-]?%d+[%.]?%d*',
+	},
+}
 local LCPP_TOKENIZE_EXPR = {
 	string = false,
 	keywords = { 
@@ -674,6 +682,20 @@ local function prepareMacro(state, input)
 	return table.concat(out), concat
 end
 
+-- macro args replacement function slower but more torelant for pathological case 
+local function replaceArgs(argsstr, repl)
+	local args = {}
+	for k, v, start, end_ in tokenizer(argsstr, LCPP_TOKENIZE_MACRO_ARGS) do
+		--print("replaceArgs:" .. k .. "|" .. v)
+		if k == "identifier" or k == "FUNCTIONAL_ARG" or k == "NUMBER_ARG" or k == "STRING_ARG" then
+			table.insert(args, v)
+		end
+	end
+	local v = repl:gsub("%$(%d+)", function (m) return args[tonumber(m)] or "" end)
+	--print("replaceArgs:" .. repl .. "|" .. tostring(#args) .. "|" .. v)
+	return v
+end
+
 -- i.e.: "MAX(x, y) (((x) > (y)) ? (x) : (y))"
 local function parseFunction(state, input)
 	if not input then return end
@@ -687,32 +709,15 @@ local function parseFunction(state, input)
 	for argname in argsstr:gmatch(IDENTIFIER) do
 		noargs = noargs + 1
 		repl = repl:gsub("#?"..argname, function (s)
-			return (s:byte(1) == STRINGIFY_BYTE) and ("\"%"..noargs.."\"") or ("%"..noargs)
+			return (s:byte(1) == STRINGIFY_BYTE) and ("\"$"..noargs.."\"") or ("$"..noargs)
 		end)
 	end
-	
-	-- build pattern string:  name(arg, arg, ...)
-	local pattern
-	if     noargs == 0 then pattern = name.."%s*%(%s*%)"                             -- quick 0 arg version
-	elseif noargs == 1 then pattern = name.."%s*%(%s*([^,%)]*)%s*%)"                 -- quick 1 arg version
-	elseif noargs == 2 then pattern = name.."%s*%(%s*([^,%)]*)%s*,%s*([^,%)]*)%s*%)" -- quick 2 arg version
-	else -- arbitrary arg version
-		local buf = {}
-		table.insert(buf, name)
-		table.insert(buf, "%s*%(%s*")
-		for i = 1, noargs do
-			table.insert(buf, "([^,%)]*)%s*")
-			if i < noargs then
-				table.insert(buf, ",%s*")
-			end
-		end
-		table.insert(buf, "%)")
-		pattern = table.concat(buf)
-	end
-	
+		
 	-- build macro funcion
 	local func = concat and function (input)
-		local value = input:gsub(pattern, repl)
+		local value = input:gsub(name.."%s*(%b())", function (match)
+			return replaceArgs(match, repl)
+		end)
 		local cc
 		repeat
 			-- when concat occurs, new macro chaining may occur
@@ -720,7 +725,9 @@ local function parseFunction(state, input)
 		until not cc
 		return value
 	end or function(input)
-		return input:gsub(pattern, repl)
+		return input:gsub(name.."%s*(%b())", function (match)
+			return replaceArgs(match, repl)
+		end)
 	end
 	
 	return name, func
@@ -944,7 +951,18 @@ function lcpp.test(suppressMsg)
 			 and y)
 		assert(LCPP_FUNCTION_2(false, true), "multiline function macro")
 		#define LCPP_FUNCTION_3(_x, _y) LCPP_FUNCTION_2(_x, _y)
-		assert(LCPP_FUNCTION_3(false, true), "multiline function macro with argname contains _")
+		assert(LCPP_FUNCTION_3(false, true), "function macro with argname contains _")
+
+		#define LCPP_FUNCTION_4_CHILD() false
+		#define LCPP_FUNCTION_4(_x)
+		local function check_argnum(...)
+			return select('#', ...)
+		end
+		assert(check_argnum(LCPP_FUNCTION_4(LCPP_FUNCTION_4_CHILD())) == 0, "functional macro which receives functional macro as argument")
+
+		#define LCPP_FUNCTION_5(x, y) (x) + (x) + (y) + (y)
+		assert(LCPP_FUNCTION_5(10, 20) == 60, "macro argument multiple usage")
+
 		#define LCPP_NOT_FUNCTION (BLUR)
 		assert(LCPP_NOT_FUNCTION == 456, "if space between macro name and argument definition exists, it is regarded as replacement macro")
 	
@@ -1019,6 +1037,9 @@ function lcpp.test(suppressMsg)
 		#define STRINGIFY_AND_CONCAT(str1, str2) #str1 ## \
 		#str2
 		assert(STRINGIFY_AND_CONCAT(fgh, ij) == "fghij", msg)
+
+		#define msg_concat(msg1, msg2) msg1 ## msg2
+		assert("I, am, lcpp" == msg_concat("I, am", ", lcpp"), "processing macro argument which includes ,")
 
 	]]
 	lcpp.FAST = false	-- enable full valid output for testing
