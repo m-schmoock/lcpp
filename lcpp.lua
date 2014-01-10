@@ -385,32 +385,39 @@ end
 
 -- apply currently known macros to input (and returns it)
 local function apply(state, input)
-	local out = {}
-	local functions = {}
+	while true do
+		local out = {}
+		local functions = {}
+		local expand
 
-	for k, v, start, end_ in tokenizer(input) do
-		if k == "identifier" then 
-			local repl = v
-			local macro = state.defines[v] 
-			if macro then
-				if type(macro)     == "boolean" then
-					repl = ""
-				elseif type(macro) == "string" then
-					repl = macro
-				elseif type(macro) == "number" then
-					repl = tostring(macro)
-				elseif type(macro) == "function" then
-					table.insert(functions, macro)	-- we apply functions in a later step
+		for k, v, start, end_ in tokenizer(input) do
+			if k == "identifier" then 
+				local repl = v
+				local macro = state.defines[v] 
+				if macro then
+					if type(macro)     == "boolean" then
+						repl = ""
+					elseif type(macro) == "string" then
+						repl = macro
+					elseif type(macro) == "number" then
+						repl = tostring(macro)
+					elseif type(macro) == "function" then
+						table.insert(functions, macro)	-- we apply functions in a later step
+					end
+					expand = true
 				end
+				table.insert(out, repl)
+			else
+				table.insert(out, input:sub(start, end_))
 			end
-			table.insert(out, repl)
-		else
-			table.insert(out, input:sub(start, end_))
 		end
-	end
-	input = table.concat(out)
-	for _, func in pairs(functions) do	-- TODO: looks sucky (but works quite nice)
-		input = func(input)
+		input = table.concat(out)
+		for _, func in pairs(functions) do	-- TODO: looks sucky (but works quite nice)
+			input = func(input)
+		end
+		if not expand then
+			break
+		end
 	end
 
 	-- C liberal string concatenation
@@ -546,12 +553,7 @@ end
 local function define(state, key, value, override)
 	--print("define:"..key.." type:"..type(value))
 	if value and not override and state:defined(key) then error("already defined: "..key) end
-	local cc
-	repeat
-		-- when concat occurs, new macro chaining may occur
-		value,cc = state:prepareMacro(value)
-	until not cc
-	state.defines[key] = value
+	state.defines[key] = state:prepareMacro(value)
 end
 
 -- parses CPP exressions
@@ -668,18 +670,21 @@ end
 -- apply macros chaining and string ops "##" and "#"
 local function prepareMacro(state, input)
 	if type(input) ~= "string" then return input end
-	input = state:apply(input)
-	local out = {}
-	local concat
-	for k, v, start, end_ in tokenizer(input, LCPP_TOKENIZE_MACRO) do
-		if k == "CONCAT" then
-			-- remove concat op "##"
-			concat = true
-		else
-			table.insert(out, input:sub(start, end_))
+	repeat
+		input = state:apply(input)
+		local out = {}
+		local concat
+		for k, v, start, end_ in tokenizer(input, LCPP_TOKENIZE_MACRO) do
+			if k == "CONCAT" then
+				-- remove concat op "##"
+				concat = true
+			else
+				table.insert(out, input:sub(start, end_))
+			end
 		end
-	end
-	return table.concat(out), concat
+		input = table.concat(out)
+	until not concat
+	return input
 end
 
 -- macro args replacement function slower but more torelant for pathological case 
@@ -702,7 +707,7 @@ local function parseFunction(state, input)
 	local concat
 	local name, argsstr, repl = input:match(FUNCMACRO)
 	if not name or not argsstr or not repl then return end
-	repl,concat = state:prepareMacro(repl)
+	repl = state:prepareMacro(repl)
 
 	-- rename args to %1,%2... for later gsub
 	local noargs = 0
@@ -714,17 +719,7 @@ local function parseFunction(state, input)
 	end
 		
 	-- build macro funcion
-	local func = concat and function (input)
-		local value = input:gsub(name.."%s*(%b())", function (match)
-			return replaceArgs(match, repl)
-		end)
-		local cc
-		repeat
-			-- when concat occurs, new macro chaining may occur
-			value, cc = state:prepareMacro(value)
-		until not cc
-		return value
-	end or function(input)
+	local func = function(input)
 		return input:gsub(name.."%s*(%b())", function (match)
 			return replaceArgs(match, repl)
 		end)
@@ -881,6 +876,11 @@ function lcpp.test(suppressMsg)
 		lcpp_test.assertTrue()
 		assert(LEET == 0x1337, "simple #define replacement")
 		local msg
+		/* function to check macro expand to empty */
+		local function check_argnum(...)
+			return select('#', ...)
+		end
+
 
 
 		# if defined TRUE 
@@ -934,6 +934,13 @@ function lcpp.test(suppressMsg)
 		#define BAZ 456
 		#define BLUR BA##Z
 		assert(BLUR == 456, msg)
+		local testfunc = function (x) return "["..tostring(x).."]" end
+		#define FOOBAR(x) testfunc(x)
+		assert(FOOBAR(1) == "[1]", msg)
+		#define testfunc(x)
+		assert(check_argnum(FOOBAR(1)) == 0, msg)
+		#undef testfunc
+		assert(FOOBAR(1) == "[1]", msg)
 
 
 		msg = "indentation test"
@@ -955,9 +962,7 @@ function lcpp.test(suppressMsg)
 
 		#define LCPP_FUNCTION_4_CHILD() false
 		#define LCPP_FUNCTION_4(_x)
-		local function check_argnum(...)
-			return select('#', ...)
-		end
+
 		assert(check_argnum(LCPP_FUNCTION_4(LCPP_FUNCTION_4_CHILD())) == 0, "functional macro which receives functional macro as argument")
 
 		#define LCPP_FUNCTION_5(x, y) (x) + (x) + (y) + (y)
