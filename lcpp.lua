@@ -348,7 +348,6 @@ local function screener(input)
 
 		-- trim and join blocks not starting with "#"
 		local buffer = {}
-		local in_mlc -- is in  multiline comment?
 		for line in gsplit(input, NEWL) do
 			line = trim(line)
 			if #line > 0 then
@@ -397,7 +396,13 @@ local function apply(state, input)
 					elseif type(macro) == "number" then
 						repl = tostring(macro)
 					elseif type(macro) == "function" then
-						table.insert(functions, macro)	-- we apply functions in a later step
+						local decl = input:sub(start):gsub("^[_%a][_%w]%s*%b()", "%1")
+						repl = macro(decl)
+						expand = true
+						table.insert(out, repl)
+						table.insert(out, input:sub(end_ + #decl))
+						break
+						--table.insert(functions, macro)	-- we apply functions in a later step
 					end
 					expand = true
 				end
@@ -407,9 +412,6 @@ local function apply(state, input)
 			end
 		end
 		input = table.concat(out)
-		for _, func in pairs(functions) do	-- TODO: looks sucky (but works quite nice)
-			input = func(input)
-		end
 		if not expand then
 			break
 		end
@@ -1052,10 +1054,13 @@ function lcpp.test(suppressMsg)
 		#define msg_concat(msg1, msg2) msg1 ## msg2
 		assert("I, am, lcpp" == msg_concat("I, am", ", lcpp"), "processing macro argument which includes ,")
 
+		#define FUNC__ARG 500
+		#define __ARG 100
+		#define FUNC(x) FUNC##x
+		assert(FUNC(__ARG) == 500, "create new macro symbol by concat")
 	]]
 	lcpp.FAST = false	-- enable full valid output for testing
 	local testlua = lcpp.compile(testlcpp)
-	print(testlua)
 	assert(loadstring(testlua, "testlua"))()
 	lcpp_test.assertTrueCalls = findn(testlcpp, "lcpp_test.assertTrue()")
 	assert(lcpp_test.assertTrueCount == lcpp_test.assertTrueCalls, "assertTrue calls:"..lcpp_test.assertTrueCalls.." count:"..lcpp_test.assertTrueCount)
