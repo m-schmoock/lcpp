@@ -271,12 +271,27 @@ local function _tokenizer(str, setup)
 		return str:sub(i, i2)
 	end
 	
-	local function findKeyword()
-		for name, pat in pairs(setup.keywords) do
-			local result = find(pat)
-			if result then
-				keyword = name 
-				return true 
+	local findKeyword
+	if setup.keywords_order then
+		findKeyword = function ()
+			for _, name in ipairs(setup.keywords_order) do
+				assert(setup.keywords[name])
+				local pat = setup.keywords[name]
+				local result = find(pat)
+				if result then
+					keyword = name 
+					return true 
+				end
+			end
+		end		
+	else
+		findKeyword = function ()
+			for name, pat in pairs(setup.keywords) do
+				local result = find(pat)
+				if result then
+					keyword = name 
+					return true 
+				end
 			end
 		end
 	end
@@ -591,13 +606,37 @@ local LCPP_TOKENIZE_MACRO_ARGS = {
 }
 local LCPP_TOKENIZE_EXPR = {
 	string = false,
+	keywords_order = {
+		"EQUAL",
+		"NOT_EQUAL",
+		"NOT", 
+		"DEFINED", 
+		"BROPEN", 
+		"BRCLOSE", 
+		"AND", 
+		"OR",
+		"STRING_LITERAL",
+		"NUMBER_LITERAL",
+		"PLUS",
+		"MINUS",
+		"MULTIPLY",
+		"DIV",
+	},
 	keywords = { 
+		EQUAL = '^==',
+		NOT_EQUAL = '^!=',
 		NOT = '^!', 
 		DEFINED = '^defined', 
 		BROPEN = '^[(]', 
 		BRCLOSE = '^[)]', 
 		AND = '^&&', 
 		OR = '^||',
+		STRING_LITERAL = '^"[^"]*"',
+		NUMBER_LITERAL = '^[%+%-]?%d+[%.]?%d*',
+		PLUS = '^%+',
+		MINUS = '^%-',
+		MULTIPLY = '^%*',
+		DIV = '^%/',
 	},
 }
 
@@ -631,12 +670,15 @@ end
 
 local function parseExpr(state, input) 
 	-- first call gets string input. rest uses tokenizer
-	if type(input) == "string" then input = tokenizer(input, LCPP_TOKENIZE_EXPR) end
+	if type(input) == "string" then
+		--print('parse:' .. input) 
+		input = tokenizer(input, LCPP_TOKENIZE_EXPR) 
+	end
 	local result = false
 	local _not = false
 	
 	for type, value in input do
---		print("type:"..type.." value:"..value)
+		--print("type:"..type.." value:"..value)
 		if type == "NOT" then
 			_not = true
 		end
@@ -644,7 +686,14 @@ local function parseExpr(state, input)
 			return state:parseExpr(input)
 		end
 		if type == "BRCLOSE" then
+			--print('BRCLOSE:' .. tostring(result))
 			return result
+		end
+		if type == "STRING_LITERAL" then
+			return value:sub(2,-2)
+		end
+		if type == "NUMBER_LITERAL" then
+			return tonumber(value)
 		end
 		if type == "AND" then
 			return result and state:parseExpr(input)
@@ -652,16 +701,54 @@ local function parseExpr(state, input)
 		if type == "OR" then
 			return result or state:parseExpr(input)
 		end
-		
+		if type == "EQUAL" then
+			return result == state:parseExpr(input)
+		end
+		if type == "NOT_EQUAL" then
+			return (result ~= state:parseExpr(input))
+		end
+		if type == "PLUS" then
+			result = (result + state:parseExpr(input))
+		end
+		if type == "MINUS" then
+			result = (result - state:parseExpr(input))
+		end
+		if type == "MULTIPLY" then
+			result = (result * state:parseExpr(input))
+		end
+		if type == "DIV" then
+			local v = state:parseExpr(input)
+			if v == 0 then
+				error("divide by 0 error")
+			end
+			result = (result / v)
+		end
 		if type == "DEFINED" then
 			if _not then
 				result = not parseDefined(state, input) 
 			else
 				result = parseDefined(state, input) 
 			end
+		elseif type == "identifier" then
+			--print('ident:' .. value)
+			local extend = state.defines[value]
+			if not extend then
+				error("macro not defined:" .. value)
+			end
+			--print('apply macro to ' .. extend)
+			local eval = state:apply(extend)
+			--print('apply result ' .. eval)
+			local ok, r = pcall(loadstring, "return " .. eval)
+			if ok and r then 
+				result = r()
+			else
+				result = eval
+			end
+			--print('result = ' .. result)
 		end
 	end
 	
+	--print('returns:' .. tostring(result))
 	return result
 end
 
@@ -1064,9 +1151,43 @@ function lcpp.test(suppressMsg)
 		#define DUP_MACRO_DEF (111)
 		#define DUP_MACRO_DEF (111)
 
+
+		msg = "check #if conditional check"
+		#define VALUE1 (123)
+		#if VALUE1 != 123 
+			assert(false, msg .." #if " .. tostring(VALUE1) .. " != 123")
+		#endif
+
+		#define VALUE2 ("hoge")
+		#if VALUE2 == "hoge"
+			#define VALUE3 (true)
+		#endif
+		assert(VALUE3 == true, msg .. " #if " .. tostring(VALUE3) .. " == true")
+
+		#define VALUE4 (VALUE1 + VALUE1)
+		#if VALUE4 != 246 
+			assert(false, msg .." #if check for nested definition:" .. tostring(VALUE4))
+		#endif
+
+		msg = "+-*/ in #if expression:"
+		#define CALC_VALUE_A (1)
+		#define CALC_VALUE_B (2)
+		#if (CALC_VALUE_A + CALC_VALUE_B) != 3
+			assert(false, msg .. " + not work:")
+		#endif
+		#if (CALC_VALUE_A * CALC_VALUE_B) != 2
+			assert(false, msg .. " * not work:")
+		#endif
+		#if (CALC_VALUE_A - CALC_VALUE_B) != -1
+			assert(false, msg .. " - not work:")
+		#endif
+		#if (CALC_VALUE_A / CALC_VALUE_B) != 0.5
+			assert(false, msg .. " / not work:")
+		#endif
 	]]
 	lcpp.FAST = false	-- enable full valid output for testing
 	local testlua = lcpp.compile(testlcpp)
+	--print(testlua)
 	assert(loadstring(testlua, "testlua"))()
 	lcpp_test.assertTrueCalls = findn(testlcpp, "lcpp_test.assertTrue()")
 	assert(lcpp_test.assertTrueCount == lcpp_test.assertTrueCalls, "assertTrue calls:"..lcpp_test.assertTrueCalls.." count:"..lcpp_test.assertTrueCount)
