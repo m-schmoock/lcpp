@@ -548,8 +548,9 @@ end
 
 -- sets a global define
 local function define(state, key, value, override)
-	--print("define:"..key.." type:"..type(value))
-	if value and not override and state:defined(key) then error("already defined: "..key) end
+	local pval = state.defines[key]
+	--print("define:"..key.." type:"..tostring(value).." value:"..tostring(pval))
+	if value and not override and pval and (pval ~= value) then error("already defined: "..key) end
 	state.defines[key] = state:prepareMacro(value)
 end
 
@@ -1058,6 +1059,11 @@ function lcpp.test(suppressMsg)
 		#define __ARG 100
 		#define FUNC(x) FUNC##x
 		assert(FUNC(__ARG) == 500, "create new macro symbol by concat")
+
+		msg = "same macro definition which has exactly same value allows. (checked with gcc 4.4.7 __WORDSIZE)"
+		#define DUP_MACRO_DEF (111)
+		#define DUP_MACRO_DEF (111)
+
 	]]
 	lcpp.FAST = false	-- enable full valid output for testing
 	local testlua = lcpp.compile(testlcpp)
