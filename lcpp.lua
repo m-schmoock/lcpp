@@ -441,8 +441,7 @@ local function processLine(state, line)
 	if not line or #line == 0 then return line end
 	local cmd = nil 
 	if line:byte(1) == CMD_BYTE then cmd = line:sub(2) end
-	--print("processLine(): "..line)
-
+	--print("processLine(): "..line.."|"..tostring(state:skip()))
 
 	--[[ IF/THEN/ELSE STRUCTURAL BLOCKS ]]--
 	if cmd then
@@ -456,11 +455,13 @@ local function processLine(state, line)
 		local struct  = ifdef or ifexp or ifndef or elif or elseif_ or else_ or endif
 		
 		if struct then 
+			local skip = state:skip()
 			if ifdef   then state:openBlock(state:defined(ifdef))      end
-			if ifexp   then state:openBlock(state:parseExpr(ifexp))    end
+			-- if skipped, it may have undefined expression so not parse them
+			if ifexp   then state:openBlock(skip and true or state:parseExpr(ifexp))    end
 			if ifndef  then state:openBlock(not state:defined(ifndef)) end
-			if elif    then state:elseBlock(state:parseExpr(elif))     end
-			if elseif_ then state:elseBlock(state:parseExpr(elseif_))  end
+			if elif    then state:elseBlock(skip < #state.stack and true or state:parseExpr(elif))     end
+			if elseif_ then state:elseBlock(skip < #state.stack and true or state:parseExpr(elseif_))  end
 			if else_   then state:elseBlock(true)                      end
 			if endif   then state:closeBlock()                         end
 			return -- remove structural directives
@@ -469,7 +470,10 @@ local function processLine(state, line)
 
 
 	--[[ SKIPPING ]]-- 
-	if state:skip() then return end
+	if state:skip() then 
+		-- print('skip:' .. line)
+		return 
+	end
 	
 
 	--[[ READ NEW DIRECTIVES ]]--
@@ -621,6 +625,10 @@ local LCPP_TOKENIZE_EXPR = {
 		"MINUS",
 		"MULTIPLY",
 		"DIV",
+		"LTE",
+		"MTE",
+		"LT",
+		"MT",
 	},
 	keywords = { 
 		EQUAL = '^==',
@@ -637,6 +645,10 @@ local LCPP_TOKENIZE_EXPR = {
 		MINUS = '^%-',
 		MULTIPLY = '^%*',
 		DIV = '^%/',
+		LTE = '^<=',
+		MTE = '^>=',
+		LT = '^<',
+		MT = '^>',
 	},
 }
 
@@ -671,7 +683,7 @@ end
 local function parseExpr(state, input) 
 	-- first call gets string input. rest uses tokenizer
 	if type(input) == "string" then
-		--print('parse:' .. input) 
+		-- print('parse:' .. input) 
 		input = tokenizer(input, LCPP_TOKENIZE_EXPR) 
 	end
 	local result = false
@@ -690,10 +702,10 @@ local function parseExpr(state, input)
 			return result
 		end
 		if type == "STRING_LITERAL" then
-			return value:sub(2,-2)
+			result = value:sub(2,-2)
 		end
 		if type == "NUMBER_LITERAL" then
-			return tonumber(value)
+			result = tonumber(value)
 		end
 		if type == "AND" then
 			return result and state:parseExpr(input)
@@ -705,7 +717,19 @@ local function parseExpr(state, input)
 			return result == state:parseExpr(input)
 		end
 		if type == "NOT_EQUAL" then
-			return (result ~= state:parseExpr(input))
+			return result ~= state:parseExpr(input)
+		end
+		if type == "LT" then
+			return result < state:parseExpr(input)
+		end
+		if type == "MT" then
+			return result > state:parseExpr(input)
+		end
+		if type == "LTE" then
+			return result <= state:parseExpr(input)
+		end
+		if type == "MTE" then
+			return result >= state:parseExpr(input)
 		end
 		if type == "PLUS" then
 			result = (result + state:parseExpr(input))
@@ -730,7 +754,7 @@ local function parseExpr(state, input)
 				result = parseDefined(state, input) 
 			end
 		elseif type == "identifier" then
-			--print('ident:' .. value)
+			-- print('ident:' .. value)
 			local extend = state.defines[value]
 			if not extend then
 				error("macro not defined:" .. value)
@@ -862,7 +886,7 @@ function lcpp.init(input, predefines)
 	end
 	state.skip = function(state)
 		for i = 1, #state.stack do
-			if not state.stack[i] then return true end
+			if not state.stack[i] then return i end
 		end
 		return false
 	end
@@ -1018,6 +1042,12 @@ function lcpp.test(suppressMsg)
 		#else
 			assert(false, msg.."4")
 		#endif
+		#if !defined(LEET) && !defined(TRUE)
+			assert(false, msg.."5")
+		#endif
+		#if defined(LEET) && defined(TRUE) && defined(NOTDEFINED)
+			assert(false, msg.."6")
+		#endif
 
 
 		msg = "macro chaining"
@@ -1070,7 +1100,11 @@ function lcpp.test(suppressMsg)
 		
 		msg = "#elif test"
 		#if defined(NOTDEFINED)
+			-- it should not be processed
+			#if NOTDEFINED
+			#else
 			assert(false, msg.."1")
+			#endif
 		#elif defined(NOTDEFINED)
 			assert(false, msg.."2")
 		#elif defined(TRUE)
@@ -1157,6 +1191,9 @@ function lcpp.test(suppressMsg)
 		#if VALUE1 != 123 
 			assert(false, msg .." #if " .. tostring(VALUE1) .. " != 123")
 		#endif
+		#if 123 != VALUE1 
+			assert(false, msg .." #if " .. tostring(VALUE1) .. " != 123 (2)")
+		#endif
 
 		#define VALUE2 ("hoge")
 		#if VALUE2 == "hoge"
@@ -1169,7 +1206,7 @@ function lcpp.test(suppressMsg)
 			assert(false, msg .." #if check for nested definition:" .. tostring(VALUE4))
 		#endif
 
-		msg = "+-*/ in #if expression:"
+		msg = "+-*/<> in #if expression:"
 		#define CALC_VALUE_A (1)
 		#define CALC_VALUE_B (2)
 		#if (CALC_VALUE_A + CALC_VALUE_B) != 3
@@ -1184,10 +1221,44 @@ function lcpp.test(suppressMsg)
 		#if (CALC_VALUE_A / CALC_VALUE_B) != 0.5
 			assert(false, msg .. " / not work:")
 		#endif
+
+		#if (CALC_VALUE_A >= CALC_VALUE_A)
+		#else
+			assert(false, msg .. " >= not work1")
+		#endif
+		#if (CALC_VALUE_B >= CALC_VALUE_A)
+		#else
+			assert(false, msg .. " >= not work2")
+		#endif
+		
+		#if (CALC_VALUE_B <= CALC_VALUE_B)
+		#else
+			assert(false, msg .. " <= not work1")
+		#endif
+		#if (CALC_VALUE_A <= CALC_VALUE_B)
+		#else
+			assert(false, msg .. " <= not work2")
+		#endif
+		
+		#if (CALC_VALUE_B > CALC_VALUE_A)
+		#else
+			assert(false, msg .. " > not work1")
+		#endif
+		#if (CALC_VALUE_A > CALC_VALUE_A)
+			assert(false, msg .. " > not work2")
+		#endif
+		
+		#if (CALC_VALUE_A < CALC_VALUE_B)
+		#else
+			assert(false, msg .. " < not work1")
+		#endif
+		#if (CALC_VALUE_B < CALC_VALUE_B)
+			assert(false, msg .. " < not work2")
+		#endif
 	]]
 	lcpp.FAST = false	-- enable full valid output for testing
 	local testlua = lcpp.compile(testlcpp)
-	--print(testlua)
+	-- print(testlua)
 	assert(loadstring(testlua, "testlua"))()
 	lcpp_test.assertTrueCalls = findn(testlcpp, "lcpp_test.assertTrue()")
 	assert(lcpp_test.assertTrueCount == lcpp_test.assertTrueCalls, "assertTrue calls:"..lcpp_test.assertTrueCalls.." count:"..lcpp_test.assertTrueCount)
