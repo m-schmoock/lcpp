@@ -123,7 +123,7 @@ local WHITESPACES     = "%s+"
 local OPTSPACES       = "%s*"
 local IDENTIFIER      = "[_%a][_%w]*"
 local NOIDENTIFIER    = "[^%w_]+"
-local FILENAME        = "[0-9a-zA-Z.-_/\\]+"
+local FILENAME        = "[0-9a-zA-Z.%-_/\\]+"
 local TEXT            = ".+"
 local STRINGIFY       = "#"
 local STRINGIFY_BYTE  = STRINGIFY:byte(1)
@@ -235,12 +235,45 @@ local function concatStringLiteral(input)
 	return input:gsub("\"("..STRING_LITERAL..")\""..OPTSPACES.."\"("..STRING_LITERAL..")\"", "\"%1%2\"")
 end
 
+-- C style number parse (UL, LL, L) and (octet, hex, binary)
+local function parseCInteger(input)
+	local str = input:
+		gsub('0x([a-fA-F%d]+)[UL]*', function (m)
+			return tonumber(m, 16)
+		end):
+		gsub('0b(%d+)[UL]*', function (m)
+			return tonumber(m, 2)
+		end):
+		gsub('(0%d+)[UL]*', function (m)
+			return tonumber(m, 8)
+		end):
+		gsub('([1-9]%d*)[UL]*', function (m)
+			return tonumber(m, 10)
+		end)
+	return str
+end
+
+-- c style boolean check (thus, 0 will be false)
+local function CBoolean(value)
+	return value and (value ~= 0)
+end
+
+-- eval with c style number parse (UL, LL, L)
+local function CEval(expr)
+	local ok, r = pcall(loadstring, "return " .. parseCInteger(expr))
+	if ok and r then
+		return r()
+	else
+		error(r)
+	end
+end
+
 -- a lightweight and flexible tokenizer
 local function _tokenizer(str, setup)
 		local defsetup = {
 			-- EXAMPLE patterns have to be pretended with "^" for the tokenizer
 			["identifier"] = '^[_%a][_%w]*',
-			["number"] = '^[%+%-]?%d+[%.]?%d*',
+			["number"] = '^[%+%-]?%d+[%.]?%d*[UL]*',
 			["ignore"] = '^%s+', 
 			["string"] = true,
 			["keywords"] = { 
@@ -364,6 +397,7 @@ local function screener(input)
 		-- trim and join blocks not starting with "#"
 		local buffer = {}
 		for line in gsplit(input, NEWL) do
+			--print('newline:'..line)
 			line = trim(line)
 			if #line > 0 then
 				if line:byte(1) == CMD_BYTE then 
@@ -393,13 +427,19 @@ local function screener(input)
 end
 
 -- apply currently known macros to input (and returns it)
+local LCPP_TOKENIZE_APPLY_MACRO = {
+	keywords = { 
+		DEFINED = "^defined%s*%(%s*"..IDENTIFIER.."%s*%)"	,
+	},
+}
 local function apply(state, input)
 	while true do
 		local out = {}
 		local functions = {}
 		local expand
 
-		for k, v, start, end_ in tokenizer(input) do
+		for k, v, start, end_ in tokenizer(input, LCPP_TOKENIZE_APPLY_MACRO) do
+			-- print('tokenize:'..tostring(k).."|"..tostring(v))
 			if k == "identifier" then 
 				local repl = v
 				local macro = state.defines[v] 
@@ -411,17 +451,25 @@ local function apply(state, input)
 					elseif type(macro) == "number" then
 						repl = tostring(macro)
 					elseif type(macro) == "function" then
-						local decl = input:sub(start):gsub("^[_%a][_%w]%s*%b()", "%1")
-						repl = macro(decl)
-						expand = true
-						table.insert(out, repl)
-						table.insert(out, input:sub(end_ + #decl))
-						break
-						--table.insert(functions, macro)	-- we apply functions in a later step
+						local decl,cnt = input:sub(start):gsub("^[_%a][_%w]*%s*%b()", "%1")
+						-- print('matching:'..input.."|"..decl.."|"..cnt)
+						if cnt > 0 then
+							repl = macro(decl)
+							-- print("d&r:"..decl.."|"..repl)
+							expand = true
+							table.insert(out, repl)
+							table.insert(out, input:sub(end_ + #decl))
+							break
+						else
+							-- print(v ..': cannot replace:<'..input..'> read more line')
+							return input,true
+						end
 					end
 					expand = true
 				end
 				table.insert(out, repl)
+			elseif k == "DEFINED" then
+				table.insert(out, input:sub(start, end_))
 			else
 				table.insert(out, input:sub(start, end_))
 			end
@@ -429,11 +477,11 @@ local function apply(state, input)
 		input = table.concat(out)
 		if not expand then
 			break
-		end
+		end		
 	end
 
-	-- C liberal string concatenation
-	return concatStringLiteral(input)
+	-- C liberal string concatenation, process UL, L, LL, U
+	return parseCInteger(concatStringLiteral(input)),false
 end
 
 -- processes an input line. called from lcpp doWork loop
@@ -457,11 +505,11 @@ local function processLine(state, line)
 		if struct then 
 			local skip = state:skip()
 			if ifdef   then state:openBlock(state:defined(ifdef))      end
-			-- if skipped, it may have undefined expression so not parse them
-			if ifexp   then state:openBlock(skip and true or state:parseExpr(ifexp))    end
+			-- if skipped, it may have undefined expression. so not parse them
+			if ifexp   then state:openBlock(skip and true or CBoolean(state:parseExpr(ifexp)))    end
 			if ifndef  then state:openBlock(not state:defined(ifndef)) end
-			if elif    then state:elseBlock(skip < #state.stack and true or state:parseExpr(elif))     end
-			if elseif_ then state:elseBlock(skip < #state.stack and true or state:parseExpr(elseif_))  end
+			if elif    then state:elseBlock((skip and skip < #state.stack) and true or CBoolean(state:parseExpr(elif)))     end
+			if elseif_ then state:elseBlock((skip and skip < #state.stack) and true or CBoolean(state:parseExpr(elseif_)))  end
 			if else_   then state:elseBlock(true)                      end
 			if endif   then state:closeBlock()                         end
 			return -- remove structural directives
@@ -533,9 +581,23 @@ local function processLine(state, line)
 		error("unknown directive: "..line)
 	end
 
+	if state.incompleteLine then
+		--print('merge with incompleteLine:'..state.incompleteLine)
+		line = (state.incompleteLine .. line)
+		state.incompleteLine = nil
+	end
+
 	
 	--[[ APPLY MACROS ]]--
-	line = state:apply(line);
+	--print(line)
+	local _line,more = state:apply(line);
+	-- 	print('endprocess:'..line)
+	if more then
+		state.incompleteLine = line
+		return ""
+	else
+		return _line
+	end
 	
 	return line
 end
@@ -602,53 +664,85 @@ local LCPP_TOKENIZE_MACRO = {
 }
 local LCPP_TOKENIZE_MACRO_ARGS = {
 	string = true,
+	keywords_order = {
+		"STRING_LITERAL",
+		"PARENTHESE",
+		"ARGS",
+
+	},
 	keywords = { 
-		FUNCTIONAL_ARG = '^' .. IDENTIFIER .. "%s*%b()",
-		STRING_ARG = '^"[^"]*"',
-		NUMBER_ARG = '^[%+%-]?%d+[%.]?%d*',
+		PARENTHESE = "^%s*%b()",
+		STRING_LITERAL = '^"[^"]*"',
+		ARGS = "^[^,]+"
 	},
 }
 local LCPP_TOKENIZE_EXPR = {
 	string = false,
 	keywords_order = {
-		"EQUAL",
-		"NOT_EQUAL",
-		"NOT", 
 		"DEFINED", 
+		"FUNCTIONAL_MACRO",
 		"BROPEN", 
 		"BRCLOSE", 
+		-- binary operators
+		"EQUAL",
+		"NOT_EQUAL",
 		"AND", 
 		"OR",
-		"STRING_LITERAL",
-		"NUMBER_LITERAL",
+		"BAND",
+		"BOR",
+		"BXOR",
 		"PLUS",
 		"MINUS",
 		"MULTIPLY",
 		"DIV",
+		"MOD",
 		"LTE",
 		"MTE",
+		"LSHIFT",
+		"RSHIFT",
 		"LT",
 		"MT",
+		-- unary operator
+		"NOT", 
+		"BNOT", 
+		-- literal
+		"STRING_LITERAL",
+		"HEX_LITERAL",
+		"FPNUM_LITERAL",
+		"NUMBER_LITERAL",
 	},
 	keywords = { 
-		EQUAL = '^==',
-		NOT_EQUAL = '^!=',
-		NOT = '^!', 
 		DEFINED = '^defined', 
+		FUNCTIONAL_MACRO = '^' .. IDENTIFIER .. "%s*%b()",
 		BROPEN = '^[(]', 
 		BRCLOSE = '^[)]', 
+
+		EQUAL = '^==',
+		NOT_EQUAL = '^!=',
 		AND = '^&&', 
 		OR = '^||',
-		STRING_LITERAL = '^"[^"]*"',
-		NUMBER_LITERAL = '^[%+%-]?%d+[%.]?%d*',
+		BAND = '^&', 
+		BOR = '^|',
+		BXOR = '^%^',
 		PLUS = '^%+',
 		MINUS = '^%-',
 		MULTIPLY = '^%*',
 		DIV = '^%/',
+		MOD = '^%%',
 		LTE = '^<=',
 		MTE = '^>=',
+		LSHIFT = '^<<',
+		RSHIFT = '^>>',
 		LT = '^<',
 		MT = '^>',
+
+		NOT = '^!', 
+		BNOT = '^~',
+
+		STRING_LITERAL = '^"[^"]*"',
+		HEX_LITERAL = '^[%+%-]?0?x[a-fA-F%d]+[UL]*',
+		FPNUM_LITERAL = '^[%+%-]?%d+[%.]?%d*e[%+%-]%d*',
+		NUMBER_LITERAL = '^[%+%-]?0?b?%d+[%.]?%d*[UL]*',
 	},
 }
 
@@ -680,100 +774,252 @@ local function parseDefined(state, input)
 	error("expression parse error: defined(ident)")
 end
 
+
+--[[
+order : smaller is higher priority
+1	()   []   ->   .  	
+2	 !   ~   -   +   *   &   sizeof   type cast   ++   --  	
+3	*   /   %	
+4	+   -	
+5	<<   >>	
+6	<   <=   >   >=	
+7	==   !=	
+8	&	
+9	^	
+10	|	
+11	&&	
+12	||	
+13	 ?:   =   +=   -=   *=   /=   %=   &=   |=   ^=   <<=   >>=	
+14	,	
+]]
+local combination_order = function (op, unary)
+	if unary then
+		if op == '-' or op == '!' or op == '~' then
+			return 2
+		else
+			assert(false, 'unsupported unary operator:' .. op)
+		end
+	else
+		if op == '*' or op == '/' or op == '%' then
+			return 3
+		elseif op == '+' or op == '-' then
+			return 4
+		elseif op == '>>' or op == '<<' then
+			return 5
+		elseif op == '<' or op == '>' or op == '<=' or op == '>=' then
+			return 6
+		elseif op == '==' or op == '!=' then
+			return 7
+		elseif op == '&' then
+			return 8
+		elseif op == '^' then
+			return 9
+		elseif op == '|' then
+			return 10
+		elseif op == '&&' then
+			return 11
+		elseif op == '||' then
+			return 12
+		else
+			assert(false, 'unsupported operator:' .. op)
+		end
+	end
+end
+
+local evaluate
+evaluate = function (node)
+	if not node.op then -- leaf node or leaf node with unary operators
+		local v = node.v
+		if node.uops then
+			for _, uop in ipairs(node.uops) do
+				-- print('apply uop:'..uop.."|"..tostring(v))
+				if uop == '-' then
+					v = -v
+				elseif uop == '!' then
+					v = (not v)
+				elseif uop == '~' then
+					v = bit.bnot(v)
+				else
+					assert(false, 'invalid uop:' .. tostring(uop))			
+				end
+			end
+		end
+		return v
+	end
+	-- print(node.op..':'..tostring(node.l.v).."("..type(node.l.v)..")|"..tostring(node.r.v).."("..type(node.r.v)..")")
+	if node.op == '+' then -- binary operators
+		return (evaluate(node.l) + evaluate(node.r))
+	elseif node.op == '-' then
+		return (evaluate(node.l) - evaluate(node.r))
+	elseif node.op == '*' then
+		return (evaluate(node.l) * evaluate(node.r))
+	elseif node.op == '/' then
+		return (evaluate(node.l) / evaluate(node.r))
+	elseif node.op == '%' then
+		return (evaluate(node.l) % evaluate(node.r))
+	elseif node.op == '==' then
+		return (evaluate(node.l) == evaluate(node.r))
+	elseif node.op == '!=' then
+		return (evaluate(node.l) ~= evaluate(node.r))
+	elseif node.op == '<<' then
+		return bit.lshift(evaluate(node.l), evaluate(node.r))
+	elseif node.op == '>>' then
+		return bit.rshift(evaluate(node.l), evaluate(node.r))
+	elseif node.op == '&&' then
+		return (CBoolean(evaluate(node.l)) and CBoolean(evaluate(node.r)))
+	elseif node.op == '||' then
+		return (CBoolean(evaluate(node.l)) or CBoolean(evaluate(node.r)))
+	elseif node.op == '&' then
+		return bit.band(evaluate(node.l), evaluate(node.r))
+	elseif node.op == '|' then
+		return bit.bor(evaluate(node.l), evaluate(node.r))
+	elseif node.op == '^' then
+		return bit.bxor(evaluate(node.l), evaluate(node.r))
+	elseif node.op == '<=' then
+		return (evaluate(node.l) <= evaluate(node.r))
+	elseif node.op == '>=' then
+		return (evaluate(node.l) >= evaluate(node.r))
+	elseif node.op == '<' then
+		return (evaluate(node.l) < evaluate(node.r))
+	elseif node.op == '>' then
+		return (evaluate(node.l) > evaluate(node.r))
+	else
+		assert(false, 'invalid op:' .. tostring(node.op))
+	end
+end
+
+local function setValue(node, v)
+	-- print('setValue:' .. tostring(v).."|"..tostring(node.uops))-- .. "\t" .. debug.traceback())
+	if not node.op then
+		assert(not node.v, debug.traceback())
+		node.v = v
+	else
+		assert(node.l and (not node.r))
+		node.r = {v = v, uops = node.uops}
+	end
+end
+
+local function setUnaryOp(node, uop)
+	-- print('setUnaryOp:' .. tostring(uop))-- .. "\t" .. debug.traceback())
+	if not node.uops then node.uops = {} end
+	table.insert(node.uops, 1, uop)
+end
+
 local function parseExpr(state, input) 
+	local node = {}
+	local root = node
 	-- first call gets string input. rest uses tokenizer
 	if type(input) == "string" then
 		-- print('parse:' .. input) 
 		input = tokenizer(input, LCPP_TOKENIZE_EXPR) 
 	end
-	local result = false
-	local _not = false
 	
 	for type, value in input do
-		--print("type:"..type.." value:"..value)
-		if type == "NOT" then
-			_not = true
+		-- print("type:"..type.." value:"..value)
+		-- unary operator
+		if type == "NOT" or 
+			type == "BNOT" then
+			setUnaryOp(node, value)
 		end
 		if type == "BROPEN" then
-			return state:parseExpr(input)
+			setValue(node, state:parseExpr(input))
 		end
 		if type == "BRCLOSE" then
 			--print('BRCLOSE:' .. tostring(result))
-			return result
+			break
 		end
 		if type == "STRING_LITERAL" then
-			result = value:sub(2,-2)
+			setValue(node, value:sub(2,-2))
 		end
-		if type == "NUMBER_LITERAL" then
-			result = tonumber(value)
+		if type == "NUMBER_LITERAL" or type == "HEX_LITERAL" or type == "FPNUM_LITERAL" then
+			setValue(node, tonumber(parseCInteger(value)))
 		end
-		if type == "AND" then
-			return result and state:parseExpr(input)
-		end
-		if type == "OR" then
-			return result or state:parseExpr(input)
-		end
-		if type == "EQUAL" then
-			return result == state:parseExpr(input)
-		end
-		if type == "NOT_EQUAL" then
-			return result ~= state:parseExpr(input)
-		end
-		if type == "LT" then
-			return result < state:parseExpr(input)
-		end
-		if type == "MT" then
-			return result > state:parseExpr(input)
-		end
-		if type == "LTE" then
-			return result <= state:parseExpr(input)
-		end
-		if type == "MTE" then
-			return result >= state:parseExpr(input)
-		end
-		if type == "PLUS" then
-			result = (result + state:parseExpr(input))
-		end
-		if type == "MINUS" then
-			result = (result - state:parseExpr(input))
-		end
-		if type == "MULTIPLY" then
-			result = (result * state:parseExpr(input))
-		end
-		if type == "DIV" then
-			local v = state:parseExpr(input)
-			if v == 0 then
-				error("divide by 0 error")
+		-- binary operator
+		if type == "EQUAL" or
+			type == "NOT_EQUAL" or
+			type == "AND" or
+			type == "OR" or
+			type == "BAND" or
+			type == "BOR" or
+			type == "BXOR" or
+			type == "PLUS" or
+			type == "MINUS" or
+			type == "MULTIPLY" or
+			type == "DIV" or
+			type == "MOD" or
+			type == "LTE" or
+			type == "MTE" or
+			type == "LSHIFT" or
+			type == "RSHIFT" or
+			type == "LT" or
+			type == "MT" then
+			if node.op then 
+				if not node.r then -- during parse right operand : uop1 uop2 ... uopN operand1 op1 uop(N+1) uop(N+2) ... [uop(N+K)]
+					assert(type == "MINUS",  "error: operators come consequently: " .. tostring(node.op) .. " and " .. tostring(value))
+					-- unary operater after binary operator
+					setUnaryOp(node, value)
+				else -- uop1 uop2 ... uopN operand1 op1 uop(N+1) uop(N+2) ... uop(N+M) operand2 [op2]
+					-- print("operator processing:" .. tostring(node.op) .. "|" .. value .. "|" .. tostring(node.l) .. "|" .. tostring(node.r))
+					if combination_order(node.op) >= combination_order(value) then
+						--print(value..' is stronger or equal')
+						node.r = {
+							op = value,
+							l = node.r,
+						}
+						node = node.r
+					else
+						-- print(value..' is weaker')
+						node = {
+							op = value,
+							l = root,
+						}
+						root = node
+					end
+				end
+			elseif node.v ~= nil then -- uop1 uop2 ... uopN operand1 [op]
+				local devided
+				if node.uops then
+					for _, uop in ipairs(node.uops) do
+						if combination_order(uop, true) > combination_order(value) then
+							-- there is a binary operator which has stronger than any of the unary
+							devided = uop
+						end
+					end
+				end
+				if devided then
+					assert(false, "TODO: can we do something about this case??:"..value.." is stronger than "..devided)
+				else
+					node.l = { v = node.v, uops = node.uops }
+					node.v = nil
+					node.uops = nil
+					node.op = value
+				end
+			else -- unary operator : uop1 uop2 ... [uopN]
+				assert(type == "MINUS", "error: invalid unary operator:" .. value)
+				setUnaryOp(node, value)
 			end
-			result = (result / v)
 		end
 		if type == "DEFINED" then
-			if _not then
-				result = not parseDefined(state, input) 
-			else
-				result = parseDefined(state, input) 
-			end
-		elseif type == "identifier" then
+			setValue(node, parseDefined(state, input))
+		elseif type == "identifier" or type == "FUNCTIONAL_MACRO" then
 			-- print('ident:' .. value)
-			local extend = state.defines[value]
-			if not extend then
-				error("macro not defined:" .. value)
-			end
-			--print('apply macro to ' .. extend)
-			local eval = state:apply(extend)
-			--print('apply result ' .. eval)
-			local ok, r = pcall(loadstring, "return " .. eval)
-			if ok and r then 
-				result = r()
+			local eval = state:apply(value)
+			-- print('apply result ' .. eval .. "|" .. tostring(unprocessed))
+			if eval ~= value then
+				eval = state:parseExpr(eval)
+				-- print('re-evaluate expr ' .. tostring(eval))
+				setValue(node, eval)
 			else
-				result = eval
+				-- undefined macro symbol is always treated as 0.
+				-- http://gcc.gnu.org/onlinedocs/cpp/If.html#If
+				setValue(node, 0)
 			end
-			--print('result = ' .. result)
 		end
 	end
 	
-	--print('returns:' .. tostring(result))
-	return result
+	local r = evaluate(root)
+	-- print('evaluate:' .. tostring(r))
+	return r
 end
 
 -- apply string ops "##"
@@ -798,14 +1044,16 @@ end
 -- macro args replacement function slower but more torelant for pathological case 
 local function replaceArgs(argsstr, repl)
 	local args = {}
+	argsstr = argsstr:sub(2,-2)
+	-- print('argsstr:'..argsstr)
 	for k, v, start, end_ in tokenizer(argsstr, LCPP_TOKENIZE_MACRO_ARGS) do
-		--print("replaceArgs:" .. k .. "|" .. v)
-		if k == "identifier" or k == "FUNCTIONAL_ARG" or k == "NUMBER_ARG" or k == "STRING_ARG" then
+		-- print("replaceArgs:" .. k .. "|" .. v)
+		if k == "ARGS" or k == "PARENTHESE" or k == "STRING_LITERAL" then
 			table.insert(args, v)
 		end
 	end
 	local v = repl:gsub("%$(%d+)", function (m) return args[tonumber(m)] or "" end)
-	--print("replaceArgs:" .. repl .. "|" .. tostring(#args) .. "|" .. v)
+	-- print("replaceArgs:" .. repl .. "|" .. tostring(#args) .. "|" .. v)
 	return v
 end
 
@@ -987,8 +1235,34 @@ function lcpp.test(suppressMsg)
 
 
 		#define TRUE
+		#define ONE (1)
+		#define TWO (2)
+		#define THREE_FUNC(x) (3)
 		#define LEET 0x1337
+		#define CLONG 123456789L
+		#define CLONGLONG 123456789123456789LL
+		#define CULONG 12345678UL
+		#define CUINT 123456U
+		#define BINARY 0b1001 /* 9 */
+		#define OCTET 075 /* 61 */
+		#define NON_OCTET 75
+		#define HEX 0xffffU
+		#define __P(x) x
+		#  define NCURSES_IMPEXP
+		#  define NCURSES_API
+		#  define NCURSES_EXPORT(type) NCURSES_IMPEXP type NCURSES_API
+		assert(CLONG == 123456789, "read *L fails")
+		assert(CLONGLONG == 123456789123456789, "read *LL fails")
+		assert(CULONG == 12345678, "read *UL fails")
+		assert(HEX == 65535, "read hex fails")
+		#if CUINT != 123456U
+		assert(false, "cannot evaluate number which contains Unsinged postfix correctly")
+		#else
+		assert(CUINT == 123456, "read *U fails")
+		#endif
 		#pragma ignored
+		assert __P((BINARY == 9, "parse, binary literal fails"))
+		assert(OCTET == 61 and NON_OCTET == 75, "parse octet literal fails")
 	
 		lcpp_test.assertTrue()
 		assert(LEET == 0x1337, "simple #define replacement")
@@ -997,6 +1271,15 @@ function lcpp.test(suppressMsg)
 		local function check_argnum(...)
 			return select('#', ...)
 		end
+		NCURSES_EXPORT(function) test_export(a)
+			return a + 1
+		end
+		assert(test_export(2) == 3, "EXPORT style macro")
+		local macrofunc = function __P((
+			a, b))
+			return a + b
+		end
+		assert(macrofunc(1, 2) == 3, "macro arg contains parenthese")
 
 
 
@@ -1038,9 +1321,9 @@ function lcpp.test(suppressMsg)
 			assert(false, msg.."3")
 		#endif
 		#if !(defined(LEET) && defined(TRUE))
-			lcpp_test.assertTrue()
-		#else
 			assert(false, msg.."4")
+		#else
+			lcpp_test.assertTrue()
 		#endif
 		#if !defined(LEET) && !defined(TRUE)
 			assert(false, msg.."5")
@@ -1048,6 +1331,99 @@ function lcpp.test(suppressMsg)
 		#if defined(LEET) && defined(TRUE) && defined(NOTDEFINED)
 			assert(false, msg.."6")
 		#endif
+		#if ONE + TWO * TWO == 5
+			lcpp_test.assertTrue()
+		#else
+			assert(false, msg.."7")
+		#endif
+		#if (ONE + TWO) * TWO == 0x6
+			lcpp_test.assertTrue()
+		#else
+			assert(false, msg.."8")
+		#endif
+		#if ONE * TWO + ONE / TWO == 2.5
+			lcpp_test.assertTrue()
+		#else
+			assert(false, msg.."9")
+		#endif
+		#if ONE + ONE * TWO / TWO == 2
+			lcpp_test.assertTrue()
+		#else
+			assert(false, msg.."10")
+		#endif
+		#if TWO - - TWO == 4
+			lcpp_test.assertTrue()
+		#else
+			assert(false, msg.."11")
+		#endif
+		#if (TWO - - TWO) % (ONE + TWO) == 1
+			lcpp_test.assertTrue()
+		#else
+			assert(false, msg.."12")
+		#endif
+		#if ONE << TWO + TWO >> ONE == 8
+			lcpp_test.assertTrue()
+		#else
+			assert(false, msg.."13")
+		#endif
+		#if (ONE << TWO) + (TWO >> ONE) == 5
+			lcpp_test.assertTrue()
+		#else
+			assert(false, msg.."14")
+		#endif
+		#if (ONE << TWO) + TWO >> ONE == 3
+			lcpp_test.assertTrue()
+		#else
+			assert(false, msg.."15")
+		#endif
+		#if (THREE_FUNC(0xfffffU) & 4) == 0
+			lcpp_test.assertTrue()
+		#else
+			assert(false, msg.."16")
+		#endif
+		#if (0x3 & THREE_FUNC("foobar")) == 0b11
+			lcpp_test.assertTrue()
+		#else
+			assert(false, msg.."17")
+		#endif
+		#if defined(TWO) && ((TWO-0) < 3)
+			lcpp_test.assertTrue()
+		#else
+			assert(false, msg.."17")
+		#endif
+		#if TWO == 1--1 
+			lcpp_test.assertTrue()
+		#else
+			assert(false, msg.."18")
+		#endif
+		#if HEX > 0xfFfFU 
+			assert(false, msg.."18")
+		#else
+			lcpp_test.assertTrue()
+		#endif
+		#define TRUE_DEFINED defined(TRUE)
+		#if TRUE_DEFINED
+			lcpp_test.assertTrue()
+		#else
+			assert(false, msg.."19")
+		#endif
+		#define NOTDEFINED_DEFINED defined(TRUE) && defined(NOTDEFINED)
+		#if NOTDEFINED_DEFINED
+			assert(false, msg.."20")
+		#else
+			lcpp_test.assertTrue()
+		#endif
+		#if LEET && LEET > 0x1336
+			lcpp_test.assertTrue()
+		#else
+			assert(false, msg.."20")
+		#endif
+		#if NOTLEET && NOTLEET > 0x1336
+			assert(false, msg.."21")
+		#else
+			lcpp_test.assertTrue()
+		#endif
+
 
 
 		msg = "macro chaining"
@@ -1310,7 +1686,24 @@ lcpp.enable = function()
 				return output	
 			end
 			ffi.lcpp_cdef_backup = ffi.cdef
-			ffi.cdef = function(input) return ffi.lcpp_cdef_backup(ffi.lcpp(input)) end
+			ffi.cdef = function(input) 
+				if true then
+					return ffi.lcpp_cdef_backup(ffi.lcpp(input)) 
+				else
+					local fn,cnt = input:gsub('#include <(.+%.h)>', '%1')
+					input = ffi.lcpp(input)
+					if cnt > 0 then
+						local f = io.open("./tmp/"..fn, 'w')
+						if f then
+							f:write(input)
+							f:close()
+						else
+							assert(fn:find('/'), 'cannot open: ./tmp/'..fn)
+						end
+					end
+					return ffi.lcpp_cdef_backup(input) 
+				end
+			end
 		end
 	end
 end
