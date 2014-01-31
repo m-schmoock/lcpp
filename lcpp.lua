@@ -131,6 +131,7 @@ local STRING_LITERAL  = ".*"
 
 -- BNF WORDS
 local _INCLUDE        = "include"
+local _INCLUDE_NEXT   = "include_next"
 local _DEFINE         = "define"
 local _IFDEF          = "ifdef"
 local _IFNDEF         = "ifndef"
@@ -145,6 +146,7 @@ local _PRAGMA         = "pragma"
 
 -- BNF RULES
 local INCLUDE         = STARTL.._INCLUDE..WHITESPACES.."[\"<]("..FILENAME..")[\">]"..OPTSPACES..ENDL
+local INCLUDE_NEXT    = STARTL.._INCLUDE_NEXT..WHITESPACES.."[\"<]("..FILENAME..")[\">]"..OPTSPACES..ENDL
 local DEFINE          = STARTL.._DEFINE
 local IFDEF           = STARTL.._IFDEF..WHITESPACES.."("..IDENTIFIER..")"..OPTSPACES..ENDL
 local IFNDEF          = STARTL.._IFNDEF..WHITESPACES.."("..IDENTIFIER..")"..OPTSPACES..ENDL
@@ -537,6 +539,10 @@ local function processLine(state, line)
 		if filename then
 			return state:includeFile(filename)
 		end
+		local filename = cmd:match(INCLUDE_NEXT)
+		if filename then
+			return state:includeFile(filename, true)
+		end
 	
 		-- handle #undef ...
 		local key = cmd:match(UNDEF)
@@ -619,8 +625,8 @@ local function doWork(state)
 	return coroutine.wrap(function() _doWork(state) end)
 end
 
-local function includeFile(state, filename)
-	local result, result_state = lcpp.compileFile(filename, state.defines)
+local function includeFile(state, filename, next)
+	local result, result_state = lcpp.compileFile(filename, state.defines, next)
 	-- now, we take the define table of the sub file for further processing
 	state.defines = result_state.defines
 	-- and return the compiled result	
@@ -667,11 +673,13 @@ local LCPP_TOKENIZE_MACRO_ARGS = {
 	keywords_order = {
 		"STRING_LITERAL",
 		"PARENTHESE",
+		"FUNCTIONAL",
 		"ARGS",
 
 	},
 	keywords = { 
 		PARENTHESE = "^%s*%b()",
+		FUNCTIONAL = "^".. IDENTIFIER .. "%s*%b()",
 		STRING_LITERAL = '^"[^"]*"',
 		ARGS = "^[^,]+"
 	},
@@ -683,6 +691,9 @@ local LCPP_TOKENIZE_EXPR = {
 		"FUNCTIONAL_MACRO",
 		"BROPEN", 
 		"BRCLOSE", 
+
+		"TENARY_START",
+		"TENARY_MIDDLE",
 		-- binary operators
 		"EQUAL",
 		"NOT_EQUAL",
@@ -716,6 +727,9 @@ local LCPP_TOKENIZE_EXPR = {
 		FUNCTIONAL_MACRO = '^' .. IDENTIFIER .. "%s*%b()",
 		BROPEN = '^[(]', 
 		BRCLOSE = '^[)]', 
+
+		TENARY_START = '^%?',
+		TENARY_MIDDLE = '^%:',
 
 		EQUAL = '^==',
 		NOT_EQUAL = '^!=',
@@ -820,6 +834,8 @@ local combination_order = function (op, unary)
 			return 11
 		elseif op == '||' then
 			return 12
+		elseif op == '?' or op == ':' then
+			return 13
 		else
 			assert(false, 'unsupported operator:' .. op)
 		end
@@ -933,6 +949,20 @@ local function parseExpr(state, input)
 		end
 		if type == "NUMBER_LITERAL" or type == "HEX_LITERAL" or type == "FPNUM_LITERAL" then
 			setValue(node, tonumber(parseCInteger(value)))
+		end
+		-- tenary operator
+		-- tenary has lowest priority, so any other operation can be calculate now.
+		if type == "TENARY_START" then
+			local l = state:parseExpr(input)
+			local r = state:parseExpr(input)
+			if evaluate(root) then
+				return l
+			else
+				return r
+			end
+		end
+		if type == "TENARY_MIDDLE" then
+			break
 		end
 		-- binary operator
 		if type == "EQUAL" or
@@ -1048,7 +1078,7 @@ local function replaceArgs(argsstr, repl)
 	-- print('argsstr:'..argsstr)
 	for k, v, start, end_ in tokenizer(argsstr, LCPP_TOKENIZE_MACRO_ARGS) do
 		-- print("replaceArgs:" .. k .. "|" .. v)
-		if k == "ARGS" or k == "PARENTHESE" or k == "STRING_LITERAL" then
+		if k == "ARGS" or k == "PARENTHESE" or k == "STRING_LITERAL" or k == "FUNCTIONAL" then
 			table.insert(args, v)
 		end
 	end
@@ -1281,6 +1311,19 @@ function lcpp.test(suppressMsg)
 		end
 		assert(macrofunc(1, 2) == 3, "macro arg contains parenthese")
 
+		msg = "tenary operator test"
+		#if (HEX % 2 == 1 ? CUINT : CULONG) == 123456
+			lcpp_test.assertTrue()
+		#else
+			assert(false, msg.."1")
+		#endif
+		#if (OCTET % 2 == 0 ? CUINT : CULONG) == 123456
+			assert(false, msg.."1")
+		#else
+			lcpp_test.assertTrue()
+		#endif
+
+
 
 
 		# if defined TRUE 
@@ -1466,6 +1509,7 @@ function lcpp.test(suppressMsg)
 		#define LCPP_FUNCTION_4(_x)
 
 		assert(check_argnum(LCPP_FUNCTION_4(LCPP_FUNCTION_4_CHILD())) == 0, "functional macro which receives functional macro as argument")
+		assert(check_argnum(LCPP_FUNCTION_4(LCPP_FUNCTION_3(true, true))) == 0, "functional macro which receives functional macro as argument2")
 
 		#define LCPP_FUNCTION_5(x, y) (x) + (x) + (y) + (y)
 		assert(LCPP_FUNCTION_5(10, 20) == 60, "macro argument multiple usage")
