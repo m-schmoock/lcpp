@@ -142,10 +142,12 @@ local _ELSE           = "else"
 local _ELIF           = "elif"
 local _NOT            = "!"
 local _ERROR          = "error"
+local _WARNING		  = "warning"
 local _PRAGMA         = "pragma"
 
 -- BNF RULES
-local INCLUDE         = STARTL.._INCLUDE..WHITESPACES.."[\"<]("..FILENAME..")[\">]"..OPTSPACES..ENDL
+local INCLUDE         = STARTL.._INCLUDE..WHITESPACES.."[<]("..FILENAME..")[>]"..OPTSPACES..ENDL
+local LOCAL_INCLUDE   = STARTL.._INCLUDE..WHITESPACES.."[\"]("..FILENAME..")[\"]"..OPTSPACES..ENDL
 local INCLUDE_NEXT    = STARTL.._INCLUDE_NEXT..WHITESPACES.."[\"<]("..FILENAME..")[\">]"..OPTSPACES..ENDL
 local DEFINE          = STARTL.._DEFINE
 local IFDEF           = STARTL.._IFDEF..WHITESPACES.."("..IDENTIFIER..")"..OPTSPACES..ENDL
@@ -157,6 +159,7 @@ local ELSE            = STARTL.._ELSE..OPTSPACES..ENDL
 local ELIF            = STARTL.._ELIF..WHITESPACES.."(.*)"..ENDL
 local ELSEIF          = STARTL.._ELSE..WHITESPACES.._IF..WHITESPACES.."(.*)"..ENDL
 local ERROR           = STARTL.._ERROR..WHITESPACES.."("..TEXT..")"..OPTSPACES..ENDL
+local WARNING         = STARTL.._WARNING..WHITESPACES.."("..TEXT..")"..OPTSPACES..ENDL
 local ERROR_NOTEXT    = STARTL.._ERROR..OPTSPACES..ENDL	--> not required when we have POSIX regex
 local PRAGMA          = STARTL.._PRAGMA
 
@@ -237,24 +240,6 @@ local function concatStringLiteral(input)
 	return input:gsub("\"("..STRING_LITERAL..")\""..OPTSPACES.."\"("..STRING_LITERAL..")\"", "\"%1%2\"")
 end
 
--- C style number parse (UL, LL, L) and (octet, hex, binary)
-local function parseCInteger(input)
-	local str = input:
-		gsub('0x([a-fA-F%d]+)[UL]*', function (m)
-			return tonumber(m, 16)
-		end):
-		gsub('0b(%d+)[UL]*', function (m)
-			return tonumber(m, 2)
-		end):
-		gsub('(0%d+)[UL]*', function (m)
-			return tonumber(m, 8)
-		end):
-		gsub('([1-9]%d*)[UL]*', function (m)
-			return tonumber(m, 10)
-		end)
-	return str
-end
-
 -- c style boolean check (thus, 0 will be false)
 local function CBoolean(value)
 	return value and (value ~= 0)
@@ -333,10 +318,10 @@ local function _tokenizer(str, setup)
 
 	while true do
 		if i > strlen then return 'eof', nil, strlen, strlen end
-		if find(setup.ignore) then	
-			coroutine.yield("ignore", cut(), i1, i2)
-		elseif findKeyword() then
+		if findKeyword() then
 			coroutine.yield(keyword, cut(), i1, i2)
+		elseif find(setup.ignore) then	
+			coroutine.yield("ignore", cut(), i1, i2)
 		elseif find(setup.number) then
 			coroutine.yield('number', tonumber(cut()), i1, i2)
 		elseif find(setup.identifier) then
@@ -384,6 +369,59 @@ local function removeComments(input)
 		end
 	end
 	return table.concat(out)
+end
+
+-- C style number parse (UL, LL, L) and (octet, hex, binary)
+local LCPP_TOKENIZE_INTEGER = {
+	string = false,
+	keywords_order = {
+		"STRING_LITERAL",
+		"CHAR_LITERAL",
+		"HEX_LITERAL",
+		"BIN_LITERAL",
+		"OCT_LITERAL",
+		"FPNUM_LITERAL",
+		"NUMBER_LITERAL",
+	},
+	keywords = { 
+		STRING_LITERAL = '^"[^"]*"',
+		CHAR_LITERAL = "^L'.*'",
+		HEX_LITERAL = '^[%+%-]?%s*0x[a-fA-F%d]+[UL]*',
+		BIN_LITERAL = '^[%+%-]?%s*0b%d+[UL]*',
+		OCT_LITERAL = '^[%+%-]?%s*0%d+[UL]*',
+		FPNUM_LITERAL = '^[%+%-]?%s*%d+[%.]?%d*e[%+%-]%d*',
+		NUMBER_LITERAL = '^[%+%-]?%s*%d+[%.]?%d*[UL]+',
+	},
+}
+local function parseCInteger(input)
+	-- print('parseCInteger:input:' .. input)
+	local out = {}
+	for k, v, start, end_ in tokenizer(input, LCPP_TOKENIZE_INTEGER) do
+	-- print('parseCInteger:' .. k .. "|" .. v)
+		if k == "CHAR_LITERAL" then
+			table.insert(out, tostring(string.byte(loadstring("return \"" .. v:gsub("^L%'(.+)%'", "%1") .. "\"")())))
+		elseif k == "HEX_LITERAL" then 
+			unary, v = v:match('([%+%-]?)0x([a-fA-F%d]+)[UL]*')
+			local n = tonumber(v, 16)
+			table.insert(out, unary..tostring(n))
+		elseif k == "NUMBER_LITERAL" then 
+			v = v:match('([^UL]+)[UL]+')
+			table.insert(out, v)
+		elseif k == "BIN_LITERAL" then 
+			unary, v = v:match('([%+%-]?)0b([01]+)[UL]*')
+			local n = tonumber(v, 2)
+			table.insert(out, unary..tostring(n))
+		elseif k == "OCT_LITERAL" then 
+			unary, v = v:match('([%+%-]?)(0%d+)[UL]*')
+			local n = tonumber(v, 8)
+			table.insert(out, unary..tostring(n))
+		else
+			table.insert(out, input:sub(start, end_))
+		end
+	end
+	local str = table.concat(out)
+	-- print('parseCInteger:result:'..str)
+	return str
 end
 
 -- screener: revmoce comments, trim, ml concat...
@@ -448,10 +486,13 @@ local function apply(state, input)
 				if macro then
 					if type(macro)     == "boolean" then
 						repl = ""
+						expand = true
 					elseif type(macro) == "string" then
 						repl = macro
+						expand = (repl ~= v)
 					elseif type(macro) == "number" then
 						repl = tostring(macro)
+						expand = (repl ~= v)
 					elseif type(macro) == "function" then
 						local decl,cnt = input:sub(start):gsub("^[_%a][_%w]*%s*%b()", "%1")
 						-- print('matching:'..input.."|"..decl.."|"..cnt)
@@ -463,11 +504,18 @@ local function apply(state, input)
 							table.insert(out, input:sub(end_ + #decl))
 							break
 						else
-							-- print(v ..': cannot replace:<'..input..'> read more line')
-							return input,true
+							if input:sub(start):find("^[_%a][_%w]*%s*%(") then
+								-- that is part of functional macro declaration.
+								-- print(v ..': cannot replace:<'..input..'> read more line')
+								return input,true
+							else
+								-- on macro name is also used as the symbol of some C declaration
+								-- (e.g. /usr/include/spawn.h, /usr/include/sys/select.h on centos 6.4)
+								-- no need to preprocess.
+								print(v .. ': macro name but used as C declaration in:' .. input)
+							end
 						end
 					end
-					expand = true
 				end
 				table.insert(out, repl)
 			elseif k == "DEFINED" then
@@ -482,7 +530,7 @@ local function apply(state, input)
 		end		
 	end
 
-	-- C liberal string concatenation, process UL, L, LL, U
+	-- C liberal string concatenation, processing U,L,UL,LL
 	return parseCInteger(concatStringLiteral(input)),false
 end
 
@@ -491,7 +539,7 @@ local function processLine(state, line)
 	if not line or #line == 0 then return line end
 	local cmd = nil 
 	if line:byte(1) == CMD_BYTE then cmd = line:sub(2) end
-	--print("processLine(): "..line.."|"..tostring(state:skip()))
+	-- print("process:"..line)--.."|"..tostring(state:skip()))
 
 	--[[ IF/THEN/ELSE STRUCTURAL BLOCKS ]]--
 	if cmd then
@@ -527,23 +575,7 @@ local function processLine(state, line)
 	
 
 	--[[ READ NEW DIRECTIVES ]]--
-	if cmd then
-		-- handle #error
-		local errMsg = cmd:match(ERROR)
-		local errNoTxt = cmd:match(ERROR_NOTEXT)
-		if errMsg then error(errMsg) end
-		if errNoTxt then error("<ERROR MESSAGE NOT SET>") end
-		
-		-- handle #include ...
-		local filename = cmd:match(INCLUDE)
-		if filename then
-			return state:includeFile(filename)
-		end
-		local filename = cmd:match(INCLUDE_NEXT)
-		if filename then
-			return state:includeFile(filename, true)
-		end
-	
+	if cmd then			
 		-- handle #undef ...
 		local key = cmd:match(UNDEF)
 		if type(key) == "string" then
@@ -569,9 +601,10 @@ local function processLine(state, line)
 			else
 	
 			-- read functional macros
-			macroname, replacement = state:parseFunction(define)
+			macroname, replacement, source = state:parseFunction(define)
 			if macroname and replacement then
-				state:define(macroname, replacement)
+				-- add original text for definition to check identify
+				state:define(macroname, replacement, false, source)
 			end
 
 			end
@@ -579,9 +612,35 @@ local function processLine(state, line)
 			
 			return
 		end
+
+		-- handle #include ...
+		local filename = cmd:match(INCLUDE)
+		if filename then
+			return state:includeFile(filename)
+		end
+		local filename = cmd:match(LOCAL_INCLUDE)
+		if filename then
+			return state:includeFile(filename, false, true)
+		end
+		local filename = cmd:match(INCLUDE_NEXT)
+		if filename then
+		--print("include_next:"..filename)
+			return state:includeFile(filename, true)
+		end
 		
 		-- ignore, because we dont have any pragma directives yet
 		if cmd:match(PRAGMA) then return end
+
+		-- handle #error
+		local errMsg = cmd:match(ERROR)
+		local errNoTxt = cmd:match(ERROR_NOTEXT)
+		local warnMsg = cmd:match(WARNING)
+		if errMsg then error(errMsg) end
+		if errNoTxt then error("<ERROR MESSAGE NOT SET>") end
+		if warnMsg then 
+			print(warnMsg) 
+			return
+		end
 		
 		-- abort on unknown keywords
 		error("unknown directive: "..line)
@@ -595,9 +654,9 @@ local function processLine(state, line)
 
 	
 	--[[ APPLY MACROS ]]--
-	--print(line)
+	-- print(line)
 	local _line,more = state:apply(line);
-	-- 	print('endprocess:'..line)
+	-- print('endprocess:'.._line)
 	if more then
 		state.incompleteLine = line
 		return ""
@@ -609,7 +668,7 @@ local function processLine(state, line)
 end
 
 local function doWork(state)
-	local function _doWork(state)
+	local function _doWork(state)	
 		if not state:defined(__FILE__) then state:define(__FILE__, "<USER_CHUNK>", true) end
 		local oldIndent = state:getIndent()
 		while true do
@@ -625,8 +684,8 @@ local function doWork(state)
 	return coroutine.wrap(function() _doWork(state) end)
 end
 
-local function includeFile(state, filename, next)
-	local result, result_state = lcpp.compileFile(filename, state.defines, next)
+local function includeFile(state, filename, next, _local)
+	local result, result_state = lcpp.compileFile(filename, state.defines, state.macro_sources, next, _local)
 	-- now, we take the define table of the sub file for further processing
 	state.defines = result_state.defines
 	-- and return the compiled result	
@@ -634,10 +693,19 @@ local function includeFile(state, filename, next)
 end
 
 -- sets a global define
-local function define(state, key, value, override)
-	local pval = state.defines[key]
+local function define(state, key, value, override, macro_source)
 	--print("define:"..key.." type:"..tostring(value).." value:"..tostring(pval))
-	if value and not override and pval and (pval ~= value) then error("already defined: "..key) end
+	if value and not override then
+		if type(value) == 'function' then
+			assert(macro_source, "macro source should specify to check identity")
+			local pval = state.macro_sources[key]
+			if pval and (pval ~= macro_source) then error("already defined: "..key) end
+			state.macro_sources[key] = macro_source
+		else
+			local pval = state.defines[key]
+			if pval and (pval ~= value) then error("already defined: "..key) end
+		end
+	end
 	state.defines[key] = state:prepareMacro(value)
 end
 
@@ -664,8 +732,13 @@ end
 
 local LCPP_TOKENIZE_MACRO = {
 	string = true,
+	keywords_order = {
+		"CONCAT",
+		"SPACE",
+	},
 	keywords = { 
-		CONCAT = "^##",
+		CONCAT = "^%s*##%s*",
+		SPACE = "^%s",
 	},
 }
 local LCPP_TOKENIZE_MACRO_ARGS = {
@@ -675,13 +748,16 @@ local LCPP_TOKENIZE_MACRO_ARGS = {
 		"PARENTHESE",
 		"FUNCTIONAL",
 		"ARGS",
-
+		"SINGLE_CHARACTER_ARGS",
+		"COMMA",
 	},
 	keywords = { 
 		PARENTHESE = "^%s*%b()",
 		FUNCTIONAL = "^".. IDENTIFIER .. "%s*%b()",
 		STRING_LITERAL = '^"[^"]*"',
-		ARGS = "^[^,]+"
+		ARGS = "^[^,%s][^,]*[^,%s]",
+		SINGLE_CHARACTER_ARGS = "^[^,%s]",
+		COMMA = "^,",
 	},
 }
 local LCPP_TOKENIZE_EXPR = {
@@ -718,6 +794,7 @@ local LCPP_TOKENIZE_EXPR = {
 		"BNOT", 
 		-- literal
 		"STRING_LITERAL",
+		"CHAR_LITERAL",
 		"HEX_LITERAL",
 		"FPNUM_LITERAL",
 		"NUMBER_LITERAL",
@@ -753,7 +830,8 @@ local LCPP_TOKENIZE_EXPR = {
 		NOT = '^!', 
 		BNOT = '^~',
 
-		STRING_LITERAL = '^"[^"]*"',
+		STRING_LITERAL = '^L?"[^"]*"',
+		CHAR_LITERAL = "^L?'.*'",
 		HEX_LITERAL = '^[%+%-]?0?x[a-fA-F%d]+[UL]*',
 		FPNUM_LITERAL = '^[%+%-]?%d+[%.]?%d*e[%+%-]%d*',
 		NUMBER_LITERAL = '^[%+%-]?0?b?%d+[%.]?%d*[UL]*',
@@ -862,7 +940,7 @@ evaluate = function (node)
 		end
 		return v
 	end
-	-- print(node.op..':'..tostring(node.l.v).."("..type(node.l.v)..")|"..tostring(node.r.v).."("..type(node.r.v)..")")
+	-- 	print(node.op..':'..tostring(node.l.v or node.l.op).."("..type(node.l.v)..")|"..tostring(node.r.v or node.r.op).."("..type(node.r.v)..")")
 	if node.op == '+' then -- binary operators
 		return (evaluate(node.l) + evaluate(node.r))
 	elseif node.op == '-' then
@@ -945,9 +1023,9 @@ local function parseExpr(state, input)
 			break
 		end
 		if type == "STRING_LITERAL" then
-			setValue(node, value:sub(2,-2))
+			setValue(node, value:sub(value[1] == 'L' and 3 or 2,-2))
 		end
-		if type == "NUMBER_LITERAL" or type == "HEX_LITERAL" or type == "FPNUM_LITERAL" then
+		if type == "NUMBER_LITERAL" or type == "HEX_LITERAL" or type == "FPNUM_LITERAL" or type == "CHAR_LITERAL" then
 			setValue(node, tonumber(parseCInteger(value)))
 		end
 		-- tenary operator
@@ -990,19 +1068,29 @@ local function parseExpr(state, input)
 					setUnaryOp(node, value)
 				else -- uop1 uop2 ... uopN operand1 op1 uop(N+1) uop(N+2) ... uop(N+M) operand2 [op2]
 					-- print("operator processing:" .. tostring(node.op) .. "|" .. value .. "|" .. tostring(node.l) .. "|" .. tostring(node.r))
-					if combination_order(node.op) >= combination_order(value) then
-						--print(value..' is stronger or equal')
-						node.r = {
+					local tmp = node
+					while tmp do
+						-- print('compare ' .. value..' and ' .. tmp.op)
+						if combination_order(tmp.op) > combination_order(value) then
+							-- print(value..' is stronger than ' .. tmp.op)
+							break
+						end
+						tmp = tmp.parent
+					end
+					if tmp then
+						node = {
 							op = value,
-							l = node.r,
+							l = tmp.r,
+							parent = tmp
 						}
-						node = node.r
+						tmp.r.parent = node
+						tmp.r = node
 					else
-						-- print(value..' is weaker')
 						node = {
 							op = value,
 							l = root,
 						}
+						root.parent = node
 						root = node
 					end
 				end
@@ -1076,10 +1164,19 @@ local function replaceArgs(argsstr, repl)
 	local args = {}
 	argsstr = argsstr:sub(2,-2)
 	-- print('argsstr:'..argsstr)
+	local comma
 	for k, v, start, end_ in tokenizer(argsstr, LCPP_TOKENIZE_MACRO_ARGS) do
 		-- print("replaceArgs:" .. k .. "|" .. v)
-		if k == "ARGS" or k == "PARENTHESE" or k == "STRING_LITERAL" or k == "FUNCTIONAL" then
+		if k == "ARGS" or k == "PARENTHESE" or k == "STRING_LITERAL" or 
+			k == "FUNCTIONAL" or k == "SINGLE_CHARACTER_ARGS" then
 			table.insert(args, v)
+			comma = false
+		elseif k == "COMMA" then
+			if comma then
+				-- continued comma means empty parameter
+				table.insert(args, "")
+			end
+			comma = true
 		end
 	end
 	local v = repl:gsub("%$(%d+)", function (m) return args[tonumber(m)] or "" end)
@@ -1093,16 +1190,22 @@ local function parseFunction(state, input)
 	local concat
 	local name, argsstr, repl = input:match(FUNCMACRO)
 	if not name or not argsstr or not repl then return end
-	repl = state:prepareMacro(repl)
 
-	-- rename args to %1,%2... for later gsub
+	-- rename args to $1,$2... for later gsub
 	local noargs = 0
 	for argname in argsstr:gmatch(IDENTIFIER) do
 		noargs = noargs + 1
-		repl = repl:gsub("#?"..argname, function (s)
-			return (s:byte(1) == STRINGIFY_BYTE) and ("\"$"..noargs.."\"") or ("$"..noargs)
+		-- avoid matching substring of another identifier (eg. attrib matches __attribute__ and replace it)
+		repl = repl:gsub("(#*)(%s*)("..argname..")([_%w]?)", function (s1, s2, s3, s4)
+			if #s4 <= 0 then
+				return (#s1 == 1) and ("\"$"..noargs.."\"") or (s1..s2.."$"..noargs)
+			else
+				return s1..s2..s3..s4
+			end
 		end)
 	end
+	-- remove concat (after replace matching argument name to $1, $2, ...)
+	repl = repl:gsub("%s*##%s*", "")
 		
 	-- build macro funcion
 	local func = function(input)
@@ -1111,7 +1214,7 @@ local function parseFunction(state, input)
 		end)
 	end
 	
-	return name, func
+	return name, func, repl
 end
 
 
@@ -1120,7 +1223,7 @@ end
 -- ------------
 
 --- initialies a lcpp state. not needed manually. handy for testing
-function lcpp.init(input, predefines)
+function lcpp.init(input, predefines, macro_sources)
 	-- create sate var
 	local state     = {}              -- init the state object
 	state.defines   = {}              -- the table of known defines and replacements
@@ -1128,11 +1231,13 @@ function lcpp.init(input, predefines)
 	state.lineno    = 0               -- the current line number
 	state.stack     = {}              -- stores wether the current stack level is to be included
 	state.once      = {}              -- stack level was once true (first if that evals to true)
+	state.macro_sources = macro_sources or {} -- original replacement text for functional macro 
 	
 	-- funcs
 	state.define = define
 	state.undefine = function(state, key)
 		state:define(key, nil)
+		state.macro_sources[key] = nil
 	end
 	state.defined = function(state, key)
 		return state.defines[key] ~= nil
@@ -1197,8 +1302,8 @@ end
 -- @param predefines OPTIONAL a table of predefined variables
 -- @usage lcpp.compile("#define bar 0x1337\nstatic const int foo = bar;")
 -- @usage lcpp.compile("#define bar 0x1337\nstatic const int foo = bar;", {["bar"] = "0x1338"})
-function lcpp.compile(code, predefines)
-	local state = lcpp.init(code, predefines)
+function lcpp.compile(code, predefines, macro_sources)
+	local state = lcpp.init(code, predefines, macro_sources)
 	local buf = {}
 	for output in state:doWork() do
 		table.insert(buf, output)
@@ -1212,14 +1317,14 @@ end
 -- @param filename the file to read
 -- @param predefines OPTIONAL a table of predefined variables
 -- @usage out, state = lcpp.compileFile("../odbg/plugin.h", {["MAX_PAH"]=260, ["UNICODE"]=true})
-function lcpp.compileFile(filename, predefines)
+function lcpp.compileFile(filename, predefines, macro_sources, next, _local)
 	if not filename then error("processFile() arg1 has to be a string") end
 	local file = io.open(filename, 'r')
 	if not file then error("file not found: "..filename) end
 	local code = file:read('*a')
 	predefines = predefines or {}
 	predefines[__FILE__] = filename
-	return lcpp.compile(code, predefines)
+	return lcpp.compile(code, predefines, macro_sources)
 end
 
 
@@ -1273,14 +1378,19 @@ function lcpp.test(suppressMsg)
 		#define CLONGLONG 123456789123456789LL
 		#define CULONG 12345678UL
 		#define CUINT 123456U
-		#define BINARY 0b1001 /* 9 */
+		#define BINARY -0b1001 /* -9 */
 		#define OCTET 075 /* 61 */
 		#define NON_OCTET 75
 		#define HEX 0xffffU
 		#define __P(x) x
+		#define WCHAR_ZERO L'\0'
 		#  define NCURSES_IMPEXP
 		#  define NCURSES_API
 		#  define NCURSES_EXPORT(type) NCURSES_IMPEXP type NCURSES_API
+		#define MACRO_TO_ITSELF MACRO_TO_ITSELF
+		local MACRO_TO_ITSELF = 111
+		assert(MACRO_TO_ITSELF == 111, "can process macro to itself")
+		assert(WCHAR_ZERO == 0, "wchar evaluate fails")
 		assert(CLONG == 123456789, "read *L fails")
 		assert(CLONGLONG == 123456789123456789, "read *LL fails")
 		assert(CULONG == 12345678, "read *UL fails")
@@ -1291,7 +1401,7 @@ function lcpp.test(suppressMsg)
 		assert(CUINT == 123456, "read *U fails")
 		#endif
 		#pragma ignored
-		assert __P((BINARY == 9, "parse, binary literal fails"))
+		assert __P((BINARY == -9, "parse, binary literal fails"))
 		assert(OCTET == 61 and NON_OCTET == 75, "parse octet literal fails")
 	
 		lcpp_test.assertTrue()
@@ -1466,13 +1576,18 @@ function lcpp.test(suppressMsg)
 		#else
 			lcpp_test.assertTrue()
 		#endif
+		#if defined(NOTLEET) || BINARY + 0 >= 10L || !defined(TRUE)
+			assert(false, msg.."22")
+		#else
+			lcpp_test.assertTrue()
+		#endif
 
 
 
 		msg = "macro chaining"
-		#define FOO 123
-		#define BAR FOO+123
-		assert(BAR == 123*2, msg)
+		#define FOO 0x7B
+		#define BAR (FOO+0x7B)
+		assert(-BAR == -0x7B*2, msg)
 		#define BAZ 456
 		#define BLUR BA##Z
 		assert(BLUR == 456, msg)
@@ -1516,6 +1631,16 @@ function lcpp.test(suppressMsg)
 
 		#define LCPP_NOT_FUNCTION (BLUR)
 		assert(LCPP_NOT_FUNCTION == 456, "if space between macro name and argument definition exists, it is regarded as replacement macro")
+
+		#define __CONCAT(x, y, z, w) x ## y ## z (w)
+		local __fncall = function (x) return x + 111 end
+		assert(111 == __CONCAT( __  ,   fnc , all, 0 ), "funcall fails")
+		assert(222 == __CONCAT( __  ,, fncall, 111  ), "funcall fails2")
+		#define __ATTRIB_CALL(x, y, attrib) __attribute__(x, y, attrib)
+		local __attribute__ = function (x, y, attr) 
+			return attr * (x + y)
+		end
+		assert(__ATTRIB_CALL(  1, 2  , 100 ) == 300, "funcall fails3")
 	
 		
 		msg = "#elif test"
@@ -1604,6 +1729,8 @@ function lcpp.test(suppressMsg)
 		msg = "same macro definition which has exactly same value allows. (checked with gcc 4.4.7 __WORDSIZE)"
 		#define DUP_MACRO_DEF (111)
 		#define DUP_MACRO_DEF (111)
+		#define DUP_FUNC_MACRO(x, y) x + y
+		#define DUP_FUNC_MACRO(x, y) x + y
 
 
 		msg = "check #if conditional check"
@@ -1677,7 +1804,9 @@ function lcpp.test(suppressMsg)
 		#endif
 	]]
 	lcpp.FAST = false	-- enable full valid output for testing
+	lcpp.SELF_TEST = true
 	local testlua = lcpp.compile(testlcpp)
+	lcpp.SELF_TEST = nil
 	-- print(testlua)
 	assert(loadstring(testlua, "testlua"))()
 	lcpp_test.assertTrueCalls = findn(testlcpp, "lcpp_test.assertTrue()")
@@ -1725,8 +1854,9 @@ lcpp.enable = function()
 		if not ffi.lcpp_cdef_backup then
 			if not ffi.lcpp_defs then ffi.lcpp_defs = {} end -- defs are stored and reused
 			ffi.lcpp = function(input) 
-				local output, state = lcpp.compile(input, ffi.lcpp_defs)
+				local output, state = lcpp.compile(input, ffi.lcpp_defs, ffi.lcpp_macro_sources)
 				ffi.lcpp_defs = state.defines
+				ffi.lcpp_macro_sources = state.macro_sources
 				return output	
 			end
 			ffi.lcpp_cdef_backup = ffi.cdef
@@ -1734,7 +1864,7 @@ lcpp.enable = function()
 				if true then
 					return ffi.lcpp_cdef_backup(ffi.lcpp(input)) 
 				else
-					local fn,cnt = input:gsub('#include <(.+%.h)>', '%1')
+					local fn,cnt = input:gsub('#include ["<].-([^/]+%.h)[">]', '%1')
 					input = ffi.lcpp(input)
 					if cnt > 0 then
 						local f = io.open("./tmp/"..fn, 'w')
