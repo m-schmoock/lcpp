@@ -92,6 +92,52 @@
 --
 -- @module lcpp
 local lcpp = {}
+-- check bit is avail or not
+local ok, bit = pcall(require, 'bit')
+if not ok then
+bit = {
+	lshift = function (x, y)
+		if y < 0 then return rshift(x,-y) end 
+		return (x * 2^y) % (2^32)
+  	end,
+	rshift = function (x, y)
+  		if y < 0 then return bit.lshift(x,-y) end
+  		return math.floor(x % (2^32) / (2^y))	
+  	end,
+	bxor = function (x, y)
+		-- from http://lua-users.org/wiki/BitUtils
+		local z = 0
+		for i = 0, 31 do
+			if (x % 2 == 0) then                      -- x had a '0' in bit i
+				if ( y % 2 == 1) then                  -- y had a '1' in bit i
+					y = y - 1 
+					z = z + 2 ^ i                       -- set bit i of z to '1' 
+				end
+			else                                      -- x had a '1' in bit i
+				x = x - 1
+				if (y % 2 == 0) then                  -- y had a '0' in bit i
+					z = z + 2 ^ i                       -- set bit i of z to '1' 
+				else
+					y = y - 1 
+				end
+		  	end
+		  	y = y / 2
+		  	x = x / 2
+		end
+		return z
+	end,
+	bnot = function (x)
+		-- if word size is not defined, I think it better than 0xFFFFFFFF - x.
+		return -1 - x
+	end,
+	band = function (x, y)
+		return ((x + y) - bit.bxor(x, y)) / 2
+	end,
+	bor = function (x, y)
+		return bit.bnot(bit.band(bit.bnot(x), bit.bnot(y)))
+	end,
+}
+end
 
 -- CONFIG
 lcpp.LCPP_LUA         = false   -- whether to use lcpp to preprocess Lua code (load, loadfile, loadstring...)
@@ -926,7 +972,7 @@ evaluate = function (node)
 		local v = node.v
 		if node.uops then
 			for _, uop in ipairs(node.uops) do
-				-- print('apply uop:'..uop.."|"..tostring(v))
+			 	-- print('apply uop:'..uop.."|"..tostring(v))
 				if uop == '-' then
 					v = -v
 				elseif uop == '!' then
@@ -938,9 +984,10 @@ evaluate = function (node)
 				end
 			end
 		end
+		-- print('after apply:'..tostring(v))
 		return v
 	end
-	-- 	print(node.op..':'..tostring(node.l.v or node.l.op).."("..type(node.l.v)..")|"..tostring(node.r.v or node.r.op).."("..type(node.r.v)..")")
+	-- print(node.op..':'..tostring(node.l.v or node.l.op).."("..type(node.l.v)..")|"..tostring(node.r.v or node.r.op).."("..type(node.r.v)..")")
 	if node.op == '+' then -- binary operators
 		return (evaluate(node.l) + evaluate(node.r))
 	elseif node.op == '-' then
@@ -1802,12 +1849,27 @@ function lcpp.test(suppressMsg)
 		#if (CALC_VALUE_B < CALC_VALUE_B)
 			assert(false, msg .. " < not work2")
 		#endif
+		#if (CALC_VALUE_B | CALC_VALUE_A) != 3
+			assert(false, msg .. " | not work")
+		#endif
+		#if (CALC_VALUE_B & CALC_VALUE_A) != 0
+			assert(false, msg .. " &	 not work")
+		#endif
+		#if (CALC_VALUE_B ^ CALC_VALUE_A) != 3
+			assert(false, msg .. " ^ not work")
+		#endif
+		#if -CALC_VALUE_B != -2
+			assert(false, msg .. " unary - not work")
+		#endif
+		#if ~CALC_VALUE_B != -3
+			assert(false, msg .. " unary ~ not work")
+		#endif
 	]]
 	lcpp.FAST = false	-- enable full valid output for testing
 	lcpp.SELF_TEST = true
 	local testlua = lcpp.compile(testlcpp)
 	lcpp.SELF_TEST = nil
-	-- print(testlua)
+	-- 	print(testlua)
 	assert(loadstring(testlua, "testlua"))()
 	lcpp_test.assertTrueCalls = findn(testlcpp, "lcpp_test.assertTrue()")
 	assert(lcpp_test.assertTrueCount == lcpp_test.assertTrueCalls, "assertTrue calls:"..lcpp_test.assertTrueCalls.." count:"..lcpp_test.assertTrueCount)
