@@ -1,7 +1,7 @@
 ----------------------------------------------------------------------------
---## lcpp - a C-PreProcessor in Lua 5.1 for LuaJIT ffi
+--## lcpp - a C-PreProcessor for Lua 5.1 and LuaJIT ffi integration
 -- 
--- Copyright (C) 2012-2013 Michael Schmoock <michael@willigens.de>
+-- Copyright (C) 2012-2014 Michael Schmoock <michael@willigens.de>
 --
 --### Links
 -- * GitHub page:   [http://github.com/willsteel/lcpp](http://github.com/willsteel/lcpp)
