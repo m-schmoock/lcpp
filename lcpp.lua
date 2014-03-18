@@ -20,9 +20,15 @@
 --	local lcpp = require("lcpp")
 --
 --	-- use LuaJIT ffi and lcpp to parse cpp code
+--	local ffi = require("ffi")
 --	ffi.cdef("#include <your_header.h>")
 --
---	-- compile some input
+--	-- use lcpp manually but add some predefines
+--	local lcpp = require("lcpp"); 
+--	local out = lcpp.compileFile("your_header.h", {UNICODE=1}); 
+--	print(out);
+--
+--	-- compile some input manually
 --	local out = lcpp.compile([[
 --		#include "myheader.h"
 --		#define MAXPATH 260
@@ -32,9 +38,8 @@
 --			wchar_t        path[MAXPATH];
 --		} t_exe;
 --	]])
---
---	-- the result should be
---	out = [[
+--	-- the result should be like this
+--	out == [[
 --		// <preprocessed content of file "myheader.h">
 --		typedef struct somestruct_t {
 --			void*          base;
@@ -42,6 +47,13 @@
 --			wchar_t        path[260];
 --		} t_exe;
 --	]]
+--
+--	-- access lcpp defines dynamically (i.e. if used with ffi)
+--	local ffi = require("ffi")
+--	local lcpp = require("lcpp")
+--	ffi.cdef("#include <your_header.h>")
+--	=ffi.lcpp_defs.YOUR_DEFINE
+--
 --
 --## This CPPs BNF:
 --	RULES:
@@ -64,8 +76,6 @@
 --
 --## TODOs:
 --	- lcpp.LCPP_LUA for: load, loadfile
---	- "#" operator for stringification
---	- literal concatenation: "foo" "bar" -> "foobar"
 --
 --## License (MIT)
 -- -----------------------------------------------------------------------------
