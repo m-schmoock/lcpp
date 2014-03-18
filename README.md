@@ -1,7 +1,7 @@
 <p align="center"><a href="http://lua.org"><img src="http://lcpp.schmoock.net/lua-logo-lcpp.png"></a></p>
 ===
 
-## lcpp - a C PreProcessor in Lua 5.1 for LuaJIT ffi
+## lcpp - a C-PreProcessor for Lua 5.1 and LuaJIT ffi integration 
 
 This module offers a standard preprocessor for C code in pure Lua. 
 The primary usecase is to enable LuaJIT ffi preprocessing.
@@ -72,4 +72,4 @@ But you can also preprocess any other stuff (even Lua code itself)
 ### License
 MIT licencse included in lua modue.
 
-2012-2013 Michael Schmoock <michael@willigens.de>
+2012-2014 Michael Schmoock <michael@schmoock.net>
