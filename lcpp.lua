@@ -1345,8 +1345,26 @@ function lcpp.init(input, predefines, macro_sources)
 	state:define(__LINE__, state.lineno, true)
 	state:define(__LCPP_INDENT__, state:getIndent(), true)
 	predefines = predefines or {}
-	for k,v in pairs(lcpp.ENV) do	state:define(k, v, true) end	-- static ones
-	for k,v in pairs(predefines) do	state:define(k, v, true) end
+	for k,v in pairs(lcpp.ENV) do
+		local input = table.concat({k, v}, " ")
+		local macroname, replacement, source = state:parseFunction(input)
+		if macroname and replacement then
+			-- add original text for definition to check identify
+			state:define(macroname, replacement, true, source)
+		else
+			state:define(k, v, true)
+		end
+	end	-- static ones
+	for k,v in pairs(predefines) do
+		local input = table.concat({k, v}, " ")
+		local macroname, replacement, source = state:parseFunction(input)
+		if macroname and replacement then
+			-- add original text for definition to check identify
+			state:define(macroname, replacement, true, source)
+		else
+			state:define(k, v, true)
+		end
+	end
 	
 	if lcpp.LCPP_TEST then lcpp.STATE = state end -- activate static state debugging
 
