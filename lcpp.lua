@@ -163,6 +163,7 @@ local __LINE__        = "__LINE__"
 local __DATE__        = "__DATE__"
 local __TIME__        = "__TIME__"
 local __LCPP_INDENT__ = "__LCPP_INDENT__"
+local _Pragma 		  = "_Pragma"
 
 -- BNF LEAVES
 local ENDL            = "$"
@@ -290,12 +291,6 @@ local function findn(input, what)
 	end
 end
 
--- C literal string concatenation
-local function concatStringLiteral(input)
-	-- screener does remove multiline definition, so just check ".*"%s*".*" pattern
-	return input:gsub("\"("..STRING_LITERAL..")\""..OPTSPACES.."\"("..STRING_LITERAL..")\"", "\"%1%2\"")
-end
-
 -- c style boolean check (thus, 0 will be false)
 local function CBoolean(value)
 	return value and (value ~= 0)
@@ -309,6 +304,12 @@ local function CEval(expr)
 	else
 		error(r)
 	end
+end
+
+local function process_Pragma(value)
+	return value:gsub("\\\\", "\\"):gsub("\\\"", "\""):gsub("_Pragma%s*(%b())", function (match)
+    	return "#pragma "..match:sub(3, -3)
+    end)
 end
 
 -- a lightweight and flexible tokenizer
@@ -401,6 +402,52 @@ end
 -- ------------
 -- PARSER
 -- ------------
+-- C literal string concatenation
+local LCPP_TOKENIZE_LITERAL = {
+	string = true,
+	keywords = { 
+	},
+}
+
+local function concatStringLiteral(input)
+	--print("input = "..input)
+	local out = {}
+	local literal_appears = {}
+	local last_ignore
+	local quote 
+	for k, v, start, end_ in tokenizer(input, LCPP_TOKENIZE_LITERAL) do
+		if k == "string" then
+			--print("string:["..input:sub(start + 1, end_ - 1).."]")
+			table.insert(literal_appears, input:sub(start + 1, end_ - 1))
+			quote = input:sub(start,start)
+		elseif k == "ignore" then
+			if #literal_appears == 0 then
+				table.insert(out, input:sub(start, end_))
+			else
+				last_ignore = input:sub(start, end_)
+			end
+		else
+			if #literal_appears > 0 then
+				local concat = quote..table.concat(literal_appears)..quote
+				table.insert(out, concat)
+				if last_ignore then
+					table.insert(out, last_ignore)
+				end
+			end
+			table.insert(out, input:sub(start, end_))
+			literal_appears = {}
+			last_ignore = nil
+		end
+	end
+	if #literal_appears > 0 then
+		table.insert(out, quote..table.concat(literal_appears)..quote)
+	end
+	local rinput = table.concat(out)
+	--if rinput ~= input then
+	--	print("result:["..rinput.."]["..input.."]")
+	--end
+	return rinput
+end
 
 local LCPP_TOKENIZE_COMMENT = {
 	string = false,
@@ -533,7 +580,6 @@ local function apply(state, input)
 		local out = {}
 		local functions = {}
 		local expand
-
 		for k, v, start, end_ in tokenizer(input, LCPP_TOKENIZE_APPLY_MACRO) do
 			-- print('tokenize:'..tostring(k).."|"..tostring(v))
 			if k == "identifier" then 
@@ -550,14 +596,14 @@ local function apply(state, input)
 						repl = tostring(macro)
 						expand = (repl ~= v)
 					elseif type(macro) == "function" then
-						local decl,cnt = input:sub(start):gsub("^[_%a][_%w]*%s*%b()", "%1")
+						local decl = input:sub(start):match("^[_%a][_%w]*%s*%b()")
 						-- print('matching:'..input.."|"..decl.."|"..cnt)
-						if cnt > 0 then
+						if decl then
 							repl = macro(decl)
 							-- print("d&r:"..decl.."|"..repl)
 							expand = true
 							table.insert(out, repl)
-							table.insert(out, input:sub(end_ + #decl))
+							table.insert(out, input:sub(start + #decl))
 							break
 						else
 							if input:sub(start):find("^[_%a][_%w]*%s*%(") then
@@ -1217,7 +1263,7 @@ local function prepareMacro(state, input)
 end
 
 -- macro args replacement function slower but more torelant for pathological case 
-local function replaceArgs(argsstr, repl)
+local function replaceArgs(argsstr, repl, state)
 	local args = {}
 	argsstr = argsstr:sub(2,-2)
 	-- print('argsstr:'..argsstr)
@@ -1236,7 +1282,13 @@ local function replaceArgs(argsstr, repl)
 			comma = true
 		end
 	end
-	local v = repl:gsub("%$(%d+)", function (m) return args[tonumber(m)] or "" end)
+	local v = repl:gsub("%$(#?)(%d+)", function (stringify, m) 
+		if #stringify > 0 then
+			return args[tonumber(m)] and state:apply(args[tonumber(m)]) or ""
+		else
+			return args[tonumber(m)] or "" 
+		end
+	end)
 	-- print("replaceArgs:" .. repl .. "|" .. tostring(#args) .. "|" .. v)
 	return v
 end
@@ -1255,7 +1307,7 @@ local function parseFunction(state, input)
 		-- avoid matching substring of another identifier (eg. attrib matches __attribute__ and replace it)
 		repl = repl:gsub("(#*)(%s*)("..argname..")([_%w]?)", function (s1, s2, s3, s4)
 			if #s4 <= 0 then
-				return (#s1 == 1) and ("\"$"..noargs.."\"") or (s1..s2.."$"..noargs)
+				return (#s1 == 1) and ("\"$#"..noargs.."\"") or (s1..s2.."$"..noargs)
 			else
 				return s1..s2..s3..s4
 			end
@@ -1267,7 +1319,7 @@ local function parseFunction(state, input)
 	-- build macro funcion
 	local func = function(input)
 		return input:gsub(name.."%s*(%b())", function (match)
-			return replaceArgs(match, repl)
+			return replaceArgs(match, repl, state)
 		end)
 	end
 	
@@ -1344,6 +1396,7 @@ function lcpp.init(input, predefines, macro_sources)
 	state:define(__TIME__, os.date("%H:%M:%S"), true)
 	state:define(__LINE__, state.lineno, true)
 	state:define(__LCPP_INDENT__, state:getIndent(), true)
+	state:define(_Pragma, process_Pragma, true)
 	predefines = predefines or {}
 	for k,v in pairs(lcpp.ENV) do	state:define(k, v, true) end	-- static ones
 	for k,v in pairs(predefines) do	state:define(k, v, true) end
@@ -1416,6 +1469,11 @@ function lcpp.test(suppressMsg)
 		/*
 		 assert(false, "multi-line comment not removed")
 		 */
+		#define PLUS1(x) x + 1
+		assert(PLUS1(__LINE__) == 14, "__LINE__ should evaluate before PLUS1 evaluated")
+		#define TOSTR(x) # x
+		assert(TOSTR(__LINE__) == "15", "__LINE__ should evaluate before TOSTR evaluated")
+		assert(TOSTR() == "", "empty stringify should not cause error")
 		/* pathological case which contains single line comment start in multiline comments.
 		 * e.g. this multiline comment should be finish next line.
 		 * http://foobar.com */ // comment
@@ -1883,6 +1941,23 @@ function lcpp.test(suppressMsg)
 	assert(loadstring(testlua, "testlua"))()
 	lcpp_test.assertTrueCalls = findn(testlcpp, "lcpp_test.assertTrue()")
 	assert(lcpp_test.assertTrueCount == lcpp_test.assertTrueCalls, "assertTrue calls:"..lcpp_test.assertTrueCalls.." count:"..lcpp_test.assertTrueCount)
+
+	-- pragma test because it causes error if appeared in above testlua code
+	local src = [[
+		#ifdef DEBUG
+		#define DO_PRAGMA(x) _Pragma (#x)
+		#else
+		#define DO_PRAGMA(x)
+		#endif
+		DO_PRAGMA (CUSTOM_COMPILER debug_msg "random message")
+	]]
+	local pragma_statement = '#pragma CUSTOM_COMPILER debug_msg "random message"'
+	local r1, r2 = lcpp.compile(src), lcpp.compile(src, { DEBUG = true })
+	-- print('r1=[['..r1..']]')
+	-- print('r2=[['..r2..']]')
+	assert(not r1:match(pragma_statement))
+	assert(r2:match(pragma_statement))
+
 	_G.lcpp_test = nil	-- delete ugly global hack
 	if not suppressMsg then print("Test run suscessully") end
 end
