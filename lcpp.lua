@@ -452,6 +452,7 @@ local LCPP_TOKENIZE_INTEGER = {
 local function parseCInteger(input)
 	-- print('parseCInteger:input:' .. input)
 	local out = {}
+	local unary
 	for k, v, start, end_ in tokenizer(input, LCPP_TOKENIZE_INTEGER) do
 	-- print('parseCInteger:' .. k .. "|" .. v)
 		if k == "CHAR_LITERAL" then
