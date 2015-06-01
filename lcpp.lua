@@ -283,6 +283,7 @@ end
 local function findn(input, what)
 	local count = 0
 	local offset = 0
+	local _
 	while true do 
 			_, offset = string.find(input, what, offset+1, true)
 			if not offset then return count end
