@@ -107,7 +107,7 @@ local ok, bit = pcall(require, 'bit')
 if not ok then
 bit = {
 	lshift = function (x, y)
-		if y < 0 then return rshift(x,-y) end 
+		if y < 0 then return bit.rshift(x,-y) end 
 		return (x * 2^y) % (2^32)
   	end,
 	rshift = function (x, y)
