@@ -281,13 +281,11 @@ end
 
 -- returns the number of string occurrences
 local function findn(input, what)
-	local count = 0
 	local offset = 0
 	local _
-	while true do 
+	for count=0,math.huge do
 			_, offset = string.find(input, what, offset+1, true)
 			if not offset then return count end
-			count = count + 1
 	end
 end
 
@@ -1377,9 +1375,36 @@ end
 -- @param predefines OPTIONAL a table of predefined variables
 -- @usage out, state = lcpp.compileFile("../odbg/plugin.h", {["MAX_PAH"]=260, ["UNICODE"]=true})
 function lcpp.compileFile(filename, predefines, macro_sources, next, _local)
-	if not filename then error("processFile() arg1 has to be a string") end
-	local file = io.open(filename, 'r')
-	if not file then error("file not found: "..filename) end
+	if type(filename) ~= 'string' then error("processFile() arg1 has to be a string") end
+	local file
+	do
+		local fileseparator = string.sub(package.config,1,1)
+		local count = 0;
+		local maxcount = 3; -- Change it if you will add new methods to find file
+		repeat
+			if count > maxcount then break end
+			if count == 0 then
+				file = io.open(filename, 'r')
+			elseif count == 1 and os.getenv('C_INCLUDE_PATH') then
+				file = io.open(os.getenv('C_INCLUDE_PATH')..fileseparator..filename, 'r')
+			elseif count == 2 and os.getenv('CPLUS_INCLUDE_PATH') then
+				file = io.open(os.getenv('CPLUS_INCLUDE_PATH')..fileseparator..filename, 'r')
+			elseif count == 3 and fileseparator == '/' then -- Linux?
+				for i=1,2 do
+					if i == 1 then
+						file = io.open('/usr/local/include/'..filename, 'r')
+					elseif i == 2 then
+						file = io.open('/usr/include/'..filename, 'r')
+					end
+					if file then break end
+				end
+			end
+			count = count+1
+		until file
+	end
+	if not file then
+		error("file not found: "..filename)
+	end
 	local code = file:read('*a')
 	predefines = predefines or {}
 	predefines[__FILE__] = filename
