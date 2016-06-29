@@ -103,8 +103,6 @@
 -- @module lcpp
 local lcpp = {}
 
-
-
 -- check bit is avail or not
 local ok, bit = pcall(require, 'bit')
 if not ok then
