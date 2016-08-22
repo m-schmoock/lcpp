@@ -1255,11 +1255,11 @@ local function parseFunction(state, input)
 	for argname in argsstr:gmatch(IDENTIFIER) do
 		noargs = noargs + 1
 		-- avoid matching substring of another identifier (eg. attrib matches __attribute__ and replace it)
-		repl = repl:gsub("(#*)(%s*)("..argname..")([_%w]?)", function (s1, s2, s3, s4)
-			if #s4 <= 0 then
+		repl = repl:gsub("(#*)(%s*)([_%w]?)("..argname..")([_%w]?)", function (s1, s2, s3, s4, s5)
+			if #s5 <= 0 and #s3 <= 0 then
 				return (#s1 == 1) and ("\"$"..noargs.."\"") or (s1..s2.."$"..noargs)
 			else
-				return s1..s2..s3..s4
+				return s1..s2..s3..s4..s5
 			end
 		end)
 	end
