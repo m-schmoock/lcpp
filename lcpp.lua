@@ -1708,6 +1708,14 @@ function lcpp.test(suppressMsg)
 		#undef _
 
 		issue22 = __FILE__
+
+		local assertrue = function(val, msg)
+			assert(not val, msg)
+		end
+		msg = "issue 21 - match corrupting the identifier"
+		#define _(t, msg) assert(t, msg)
+		_(true, msg);
+		#undef _
 	
 		
 		msg = "#elif test"
