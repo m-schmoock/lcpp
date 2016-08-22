@@ -411,13 +411,14 @@ local LCPP_TOKENIZE_COMMENT = {
 		STRING_LITERAL = '^"[^"]*"',
 	},
 }
+
 -- hint: LuaJIT ffi does not rely on us to remove the comments, but maybe other usecases
 local function removeComments(input)
 	local out = {}
 	for k, v, start, end_ in tokenizer(input, LCPP_TOKENIZE_COMMENT) do
 		if k == "MLCOMMENT" then
 			local newlineCount = findn(input:sub(start, end_), "\n")
-			local newlines = string.rep("\n", newlineCount)
+			local newlines = string.rep("\\\n", newlineCount)
 			table.insert(out, newlines)
 		elseif k == "SLCOMMENT" then 
 			table.insert(out, "\n")
