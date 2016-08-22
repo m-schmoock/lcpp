@@ -1716,6 +1716,11 @@ function lcpp.test(suppressMsg)
 		#define _(t, msg) assert(t, msg)
 		_(true, msg);
 		#undef _
+
+		msg = "issue 23 - macro parameters with type conversion"
+		#define MACRO(a) a
+		assert(MACRO((false)or true), msg)
+		#undef MACRO
 	
 		
 		msg = "#elif test"
