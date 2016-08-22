@@ -1268,7 +1268,7 @@ local function parseFunction(state, input)
 		
 	-- build macro funcion
 	local func = function(input)
-		return input:gsub(name.."%s*(%b())", function (match)
+		return input:gsub("^"..name.."%s*(%b())", function (match)
 			return replaceArgs(match, repl)
 		end)
 	end
