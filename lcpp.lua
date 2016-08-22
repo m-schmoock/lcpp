@@ -1251,6 +1251,13 @@ local function replaceArgs(argsstr, repl)
 	return v
 end
 
+
+local function count_quotes(s)
+  local _, n = s:gsub('"','')
+  return n
+end
+
+
 -- i.e.: "MAX(x, y) (((x) > (y)) ? (x) : (y))"
 local function parseFunction(state, input)
 	if not input then return end
@@ -1260,14 +1267,18 @@ local function parseFunction(state, input)
 
 	-- rename args to $1,$2... for later gsub
 	local noargs = 0
+	local total_quotes = 0
+	-- print("parseFunction repl:"..tostring(repl))
 	for argname in argsstr:gmatch(IDENTIFIER) do
 		noargs = noargs + 1
 		-- avoid matching substring of another identifier (eg. attrib matches __attribute__ and replace it)
-		repl = repl:gsub("(#*)(%s*)([_%w]?)("..argname..")([_%w]?)", function (s1, s2, s3, s4, s5)
-			if #s5 <= 0 and #s3 <= 0 then
-				return (#s1 == 1) and ("\"$"..noargs.."\"") or (s1..s2.."$"..noargs)
+		repl = repl:gsub("(.-)(#*)(%s*)([_%w]?)("..argname..")([_%w]?)", function (s0, s1, s2, s3, s4, s5)
+			total_quotes = total_quotes + count_quotes(s0)
+			-- print("parseFunction:".. s0.."|"..s1.."|"..s2.."|"..s3.."|"..s4.."|"..s5)
+			if #s5 <= 0 and #s3 <= 0 and (total_quotes % 2 == 0) then
+				return (#s1 == 1) and (s0.."\"$"..noargs.."\"") or (s0..s1..s2.."$"..noargs)
 			else
-				return s1..s2..s3..s4..s5
+				return s0..s1..s2..s3..s4..s5
 			end
 		end)
 	end
