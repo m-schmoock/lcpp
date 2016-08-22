@@ -1721,6 +1721,17 @@ function lcpp.test(suppressMsg)
 
 		issue22 = __FILE__
 
+		issue24_1 = "issue 24: "
+		issue24_2 = "Related to multiline comment within a macro definition."
+		msg = issue24_1 ..
+		#define foo \
+		/* Comment here \
+			which spans lines */ \
+			"this should never appear in the output, " .. \
+			"but it does. " ..
+		issue24_2
+		assert(msg == issue24_1 .. issue24_2, msg)
+
 		local assertrue = function(val, msg)
 			assert(not val, msg)
 		end
