@@ -1224,19 +1224,26 @@ local function replaceArgs(argsstr, repl)
 	argsstr = argsstr:sub(2,-2)
 	-- print('argsstr:'..argsstr)
 	local comma
+	local arg_acc = ''
 	for k, v, start, end_ in tokenizer(argsstr, LCPP_TOKENIZE_MACRO_ARGS) do
 		-- print("replaceArgs:" .. k .. "|" .. v)
 		if k == "ARGS" or k == "PARENTHESE" or k == "STRING_LITERAL" or 
 			k == "FUNCTIONAL" or k == "SINGLE_CHARACTER_ARGS" then
-			table.insert(args, v)
+			arg_acc = arg_acc..v
 			comma = false
 		elseif k == "COMMA" then
 			if comma then
 				-- continued comma means empty parameter
 				table.insert(args, "")
+			else
+				table.insert(args, arg_acc)
+				arg_acc = ''
 			end
 			comma = true
 		end
+	end
+	if (#arg_acc > 0) then
+		table.insert(args, arg_acc)
 	end
 	local v = repl:gsub("%$(%d+)", function (m) return args[tonumber(m)] or "" end)
 	-- print("replaceArgs:" .. repl .. "|" .. tostring(#args) .. "|" .. v)
