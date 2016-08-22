@@ -1728,6 +1728,12 @@ function lcpp.test(suppressMsg)
 		#define MACRO(a) a
 		assert(MACRO((false)or true), msg)
 		#undef MACRO
+
+		msg = "issue 25 - hex number processing is incorrect"
+		local testfunc = function()
+			return 0xff00000000000000ull
+		end
+		assert(testfunc() == 18374686479671623680ULL, msg)
 	
 		
 		msg = "#elif test"
