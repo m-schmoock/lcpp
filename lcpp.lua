@@ -1751,6 +1751,13 @@ function lcpp.test(suppressMsg)
 			return 0xff00000000000000ull
 		end
 		assert(testfunc() == 18374686479671623680ULL, msg)
+
+		msg = "macro substitution should not happen within quotes"
+		#define MACRO(a) : "=a" (a)
+		#undef MACRO 
+		#define MACRO(a) a = "=a"
+		MACRO(blah)
+		assert(blah == "=a", msg)
 	
 		
 		msg = "#elif test"
