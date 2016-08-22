@@ -727,7 +727,7 @@ end
 
 local function doWork(state)
 	local function _doWork(state)	
-		if not state:defined(__FILE__) then state:define(__FILE__, "<USER_CHUNK>", true) end
+		if not state:defined(__FILE__) then state:define(__FILE__, '"'.."<USER_CHUNK>"..'"', true) end
 		local oldIndent = state:getIndent()
 		while true do
 			local input = state:getLine()
@@ -1382,7 +1382,7 @@ function lcpp.compileFile(filename, predefines, macro_sources, next, _local)
 	if not file then error("file not found: "..filename) end
 	local code = file:read('*a')
 	predefines = predefines or {}
-	predefines[__FILE__] = filename
+	predefines[__FILE__] = '"'..filename..'"'
 	return lcpp.compile(code, predefines, macro_sources)
 end
 
