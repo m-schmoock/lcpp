@@ -461,7 +461,7 @@ local function parseCInteger(input)
 		elseif k == "HEX_LITERAL" then 
 			unary, v = v:match('([%+%-]?)0x([a-fA-F%d]+)[UL]*')
 			local n = tonumber(v, 16)
-			table.insert(out, unary..tostring(n))
+			table.insert(out, " "..unary.."0x"..v) -- tostring(n)) string->num->string with 64bit lose precision
 		elseif k == "NUMBER_LITERAL" then 
 			v = v:match('([^UL]+)[UL]+')
 			table.insert(out, v)
