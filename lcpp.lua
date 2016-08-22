@@ -1422,6 +1422,11 @@ function lcpp.test(suppressMsg)
 		 * (including this comment, that would cause errors if not filtered)
 		 */
 		assert(__LINE__ == 8, "_LINE_ macro test 8: __LINE__")
+		#define MULTILINEMACRO \
+			blahla \
+			blahbla
+		assert(__LINE__ == 12, "_LINE_ macro test 12: __LINE__")
+
 		/*
 		 assert(false, "multi-line comment not removed")
 		 */
