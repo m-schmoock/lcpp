@@ -1700,6 +1700,12 @@ function lcpp.test(suppressMsg)
 			return attr * (x + y)
 		end
 		assert(__ATTRIB_CALL(  1, 2  , 100 ) == 300, "funcall fails3")
+
+		msg = "infinite loop test (issue 20)"
+		#define LOOPMACRO(v)    (WHATEVER)
+		#define _(a) -- LOOPMACRO(ai); _LOOPMACRO(bi)
+		_ (foo)
+		#undef _
 	
 		
 		msg = "#elif test"
