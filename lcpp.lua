@@ -1706,6 +1706,8 @@ function lcpp.test(suppressMsg)
 		#define _(a) -- LOOPMACRO(ai); _LOOPMACRO(bi)
 		_ (foo)
 		#undef _
+
+		issue22 = __FILE__
 	
 		
 		msg = "#elif test"
