@@ -12,7 +12,6 @@ But you can also preprocess any other stuff (even Lua code itself)
  * GitHub Page    https://github.com/m-schmoock/lcpp
  * Lua            http://www.lua.org/
  * LuaJIT         http://luajit.org
- * Sponsored by   http://mmbbq.org
 
 ### Usage
     -- load lcpp (ffi.cdef wrapper turned on per default)
