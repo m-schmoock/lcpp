@@ -156,6 +156,7 @@ lcpp.LCPP_TEST        = false   -- whether to run lcpp unit tests when loading l
 lcpp.ENV              = {}      -- static predefines (env-like)
 lcpp.FAST             = false   -- perf. tweaks when enabled. con: breaks minor stuff like __LINE__ macros
 lcpp.DEBUG            = false
+lcpp.SKIP_PRAGMA			= false
 
 -- PREDEFINES
 local __FILE__        = "__FILE__"
@@ -200,6 +201,7 @@ local _NOT            = "!"
 local _ERROR          = "error"
 local _WARNING		  = "warning"
 local _PRAGMA         = "pragma"
+local _PRAGMA_OP			= "_Pragma"
 
 -- BNF RULES
 local INCLUDE         = STARTL.._INCLUDE..WHITESPACES.."[<]("..FILENAME..")[>]"..OPTSPACES..ENDL
@@ -593,7 +595,7 @@ local function apply(state, input)
 end
 
 -- processes an input line. called from lcpp doWork loop
-local function processLine(state, line)
+local function preprocessLine(state, line)
 	if not line or #line == 0 then return line end
 	local cmd = nil 
 	if line:byte(1) == CMD_BYTE then cmd = line:sub(2) end
@@ -687,7 +689,12 @@ local function processLine(state, line)
 		end
 		
 		-- ignore, because we dont have any pragma directives yet
-		if cmd:match(PRAGMA) then return end
+		if cmd:match(PRAGMA) then
+			if lcpp.SKIP_PRAGMA then
+				return
+			end
+			return line
+		end
 
 		-- handle #error
 		local errMsg = cmd:match(ERROR)
@@ -725,6 +732,18 @@ local function processLine(state, line)
 	return line
 end
 
+local function processPragmaOp(input)
+	if input then
+		return input:gsub(_PRAGMA_OP.."%s*(%b())", function (match)
+			match = match:gsub("\\\\", "\\")
+			match = match:gsub("\\\"", "\"")
+			match = match:sub(3, #match-2)
+			return NEWL.."#".._PRAGMA.." "..match..NEWL
+		end)
+	end
+	return input
+end
+
 local function doWork(state)
 	local function _doWork(state)	
 		if not state:defined(__FILE__) then state:define(__FILE__, "<USER_CHUNK>", true) end
@@ -732,7 +751,8 @@ local function doWork(state)
 		while true do
 			local input = state:getLine()
 			if not input then break end
-			local output = processLine(state, input)
+			local output = preprocessLine(state, input)
+			output = processPragmaOp(output)
 			if not lcpp.FAST and not output then output = "" end -- output empty skipped lines
 			if lcpp.DEBUG then output = output.." -- "..input end -- input as comment when DEBUG
 			if output then coroutine.yield(output) end
@@ -1347,8 +1367,26 @@ function lcpp.init(input, predefines, macro_sources)
 	state:define(__LINE__, state.lineno, true)
 	state:define(__LCPP_INDENT__, state:getIndent(), true)
 	predefines = predefines or {}
-	for k,v in pairs(lcpp.ENV) do	state:define(k, v, true) end	-- static ones
-	for k,v in pairs(predefines) do	state:define(k, v, true) end
+	for k,v in pairs(lcpp.ENV) do
+		local input = table.concat({k, v}, " ")
+		local macroname, replacement, source = state:parseFunction(input)
+		if macroname and replacement then
+			-- add original text for definition to check identify
+			state:define(macroname, replacement, true, source)
+		else
+			state:define(k, v, true)
+		end
+	end	-- static ones
+	for k,v in pairs(predefines) do
+		local input = table.concat({k, v}, " ")
+		local macroname, replacement, source = state:parseFunction(input)
+		if macroname and replacement then
+			-- add original text for definition to check identify
+			state:define(macroname, replacement, true, source)
+		else
+			state:define(k, v, true)
+		end
+	end
 	
 	if lcpp.LCPP_TEST then lcpp.STATE = state end -- activate static state debugging
 
@@ -1459,7 +1497,6 @@ function lcpp.test(suppressMsg)
 		#else
 		assert(CUINT == 123456, "read *U fails")
 		#endif
-		#pragma ignored
 		assert __P((BINARY == -9, "parse, binary literal fails"))
 		assert(OCTET == 61 and NON_OCTET == 75, "parse octet literal fails")
 	
