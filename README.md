@@ -9,7 +9,7 @@ But you can also preprocess any other stuff (even Lua code itself)
     
 ### Links
  * Project page   http://lcpp.schmoock.net
- * GitHub Page    https://github.com/willsteel/lcpp
+ * GitHub Page    https://github.com/m-schmoock/lcpp
  * Lua            http://www.lua.org/
  * LuaJIT         http://luajit.org
  * Sponsored by   http://mmbbq.org
