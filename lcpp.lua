@@ -23,9 +23,9 @@
 --	local ffi = require("ffi")
 --	ffi.cdef("#include <your_header.h>")
 --
---	-- use lcpp manually but add some predefines
+--	-- use lcpp manually but add some predefines and system libloading
 --	local lcpp = require("lcpp"); 
---	local out = lcpp.compileFile("your_header.h", {UNICODE=1}); 
+--	local out = lcpp.compileFile("your_header.h", {UNICODE=1}, true); 
 --	print(out);
 --
 --	-- compile some input manually
@@ -102,6 +102,7 @@
 --
 -- @module lcpp
 local lcpp = {}
+
 -- check bit is avail or not
 local ok, bit = pcall(require, 'bit')
 if not ok then
@@ -155,6 +156,7 @@ lcpp.LCPP_FFI         = true    -- whether to use lcpp as LuaJIT ffi PreProcesso
 lcpp.LCPP_TEST        = false   -- whether to run lcpp unit tests when loading lcpp module
 lcpp.ENV              = {}      -- static predefines (env-like)
 lcpp.FAST             = false   -- perf. tweaks when enabled. con: breaks minor stuff like __LINE__ macros
+lcpp.PATH             = ''      -- path to search system libs. example: '/usr/include;/include;/usr/include/x86-64'
 lcpp.DEBUG            = false
 
 -- PREDEFINES
@@ -179,7 +181,7 @@ local WHITESPACES     = "%s+"
 local OPTSPACES       = "%s*"
 local IDENTIFIER      = "[_%a][_%w]*"
 local NOIDENTIFIER    = "[^%w_]+"
-local FILENAME        = "[0-9a-zA-Z.%-_/\\]+"
+local FILENAME        = "%S+"
 local TEXT            = ".+"
 local STRINGIFY       = "#"
 local STRINGIFY_BYTE  = STRINGIFY:byte(1)
@@ -281,13 +283,11 @@ end
 
 -- returns the number of string occurrences
 local function findn(input, what)
-	local count = 0
 	local offset = 0
 	local _
-	while true do 
+	for count=0,math.huge do
 			_, offset = string.find(input, what, offset+1, true)
 			if not offset then return count end
-			count = count + 1
 	end
 end
 
@@ -674,16 +674,16 @@ local function processLine(state, line)
 		-- handle #include ...
 		local filename = cmd:match(INCLUDE)
 		if filename then
-			return state:includeFile(filename)
+			return state:includeFile(filename, true)
 		end
 		local filename = cmd:match(LOCAL_INCLUDE)
 		if filename then
-			return state:includeFile(filename, false, true)
+			return state:includeFile(filename, false, false, true)
 		end
 		local filename = cmd:match(INCLUDE_NEXT)
 		if filename then
 		--print("include_next:"..filename)
-			return state:includeFile(filename, true)
+			return state:includeFile(filename, true, true)
 		end
 		
 		-- ignore, because we dont have any pragma directives yet
@@ -742,8 +742,8 @@ local function doWork(state)
 	return coroutine.wrap(function() _doWork(state) end)
 end
 
-local function includeFile(state, filename, next, _local)
-	local result, result_state = lcpp.compileFile(filename, state.defines, state.macro_sources, next, _local)
+local function includeFile(state, filename, system, next, _local)
+	local result, result_state = lcpp.compileFile(filename, state.defines, system, state.macro_sources, next, _local)
 	-- now, we take the define table of the sub file for further processing
 	state.defines = result_state.defines
 	-- and return the compiled result	
@@ -1375,12 +1375,25 @@ end
 --- preprocesses a file
 -- @param filename the file to read
 -- @param predefines OPTIONAL a table of predefined variables
--- @usage out, state = lcpp.compileFile("../odbg/plugin.h", {["MAX_PAH"]=260, ["UNICODE"]=true})
-function lcpp.compileFile(filename, predefines, macro_sources, next, _local)
-	if not filename then error("processFile() arg1 has to be a string") end
-	local file = io.open(filename, 'r')
-	if not file then error("file not found: "..filename) end
+-- @param system OPTIONAL search file in current directory or in lcpp.PATH
+-- @usage out, state = lcpp.compileFile("../odbg/plugin.h", {["MAX_PAH"]=260, ["UNICODE"]=true}, false)
+function lcpp.compileFile(filename, predefines, system, macro_sources, next, _local)
+	if type(filename) ~= 'string' then error("processFile() arg1 has to be a string") end
+	local file
+	if system then
+		local fileseparator = string.sub(package.config,1,1)
+		for path in lcpp.PATH:gmatch('%f[^\0^;](.-)%f[\0;]') do
+			file = io.open(path..fileseparator..filename)
+			if file then break end
+		end
+	else
+		file = io.open(filename, 'r')
+	end
+	if not file then
+		error("file not found (system: "..tostring(system or false).."): "..filename)
+	end
 	local code = file:read('*a')
+	file:close()
 	predefines = predefines or {}
 	predefines[__FILE__] = filename
 	return lcpp.compile(code, predefines, macro_sources)
